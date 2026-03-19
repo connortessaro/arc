@@ -96,6 +96,13 @@ actor GatewayConnection {
         case cronUpdate = "cron.update"
         case cronAdd = "cron.add"
         case cronStatus = "cron.status"
+        case codeCockpitSummary = "code.cockpit.summary"
+        case codeWorkerStart = "code.worker.start"
+        case codeWorkerSend = "code.worker.send"
+        case codeWorkerPause = "code.worker.pause"
+        case codeWorkerResume = "code.worker.resume"
+        case codeWorkerCancel = "code.worker.cancel"
+        case codeWorkerLogs = "code.worker.logs"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -776,6 +783,57 @@ extension GatewayConnection {
 
     func cronAdd(payload: [String: AnyCodable]) async throws {
         try await self.requestVoid(method: .cronAdd, params: payload)
+    }
+
+    // MARK: - Code cockpit
+
+    func codeCockpitSummary() async throws -> CockpitWorkspaceSummary {
+        try await self.requestDecoded(method: .codeCockpitSummary, timeoutMs: 10000)
+    }
+
+    func codeWorkerStart(workerId: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerStart,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 15000)
+    }
+
+    func codeWorkerSend(workerId: String, message: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerSend,
+            params: [
+                "workerId": AnyCodable(workerId),
+                "message": AnyCodable(message),
+            ],
+            timeoutMs: 15000)
+    }
+
+    func codeWorkerPause(workerId: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerPause,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 15000)
+    }
+
+    func codeWorkerResume(workerId: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerResume,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 15000)
+    }
+
+    func codeWorkerCancel(workerId: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerCancel,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 15000)
+    }
+
+    func codeWorkerLogs(workerId: String) async throws -> CockpitWorkerLogs {
+        try await self.requestDecoded(
+            method: .codeWorkerLogs,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
     }
 
     nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {

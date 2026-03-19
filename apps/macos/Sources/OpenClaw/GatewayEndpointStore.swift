@@ -283,6 +283,10 @@ actor GatewayEndpointStore {
         }
     }
 
+    func currentState() -> GatewayEndpointState {
+        self.state
+    }
+
     func refresh() async {
         let mode = await self.deps.mode()
         await self.setMode(mode)

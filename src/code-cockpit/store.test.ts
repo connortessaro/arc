@@ -1,0 +1,229 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+let tempStateDir: string;
+
+async function importStoreModule() {
+  vi.resetModules();
+  return await import("./store.js");
+}
+
+beforeEach(async () => {
+  tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-cockpit-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempStateDir);
+});
+
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  await fs.rm(tempStateDir, { recursive: true, force: true });
+});
+
+describe("code cockpit store", () => {
+  it("persists tasks, workers, reviews, decisions, and context snapshots", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Build coding cockpit",
+      repoRoot: "/tmp/openclaw",
+      goal: "Ship the first vertical slice",
+      priority: "high",
+    });
+
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "planner",
+      status: "running",
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/planner",
+      branch: "feature/planner",
+      objective: "Map the first milestone",
+    });
+
+    const review = await storeModule.createCodeReviewRequest({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Review planner branch",
+      summary: "Ready for an initial diff review",
+    });
+
+    const decision = await storeModule.appendCodeDecisionLog({
+      taskId: task.id,
+      workerId: worker.id,
+      kind: "routing",
+      summary: "Keep Codex as the only worker runtime in v1",
+    });
+
+    const snapshot = await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      workerId: worker.id,
+      kind: "repo",
+      title: "CLI architecture",
+      body: "The CLI uses lazy-loaded subcommand registrars.",
+    });
+
+    const store = await storeModule.loadCodeCockpitStore();
+    const persistedTask = store.tasks.find((entry) => entry.id === task.id);
+
+    expect(persistedTask).toMatchObject({
+      title: "Build coding cockpit",
+      repoRoot: "/tmp/openclaw",
+      goal: "Ship the first vertical slice",
+      priority: "high",
+      workerIds: [worker.id],
+      reviewIds: [review.id],
+    });
+    expect(store.workers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: worker.id,
+          taskId: task.id,
+          worktreePath: "/tmp/openclaw/.worktrees/planner",
+          status: "running",
+        }),
+      ]),
+    );
+    expect(store.reviews).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: review.id,
+          taskId: task.id,
+          workerId: worker.id,
+          status: "pending",
+        }),
+      ]),
+    );
+    expect(store.decisions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: decision.id,
+          taskId: task.id,
+          workerId: worker.id,
+          kind: "routing",
+        }),
+      ]),
+    );
+    expect(store.contextSnapshots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: snapshot.id,
+          taskId: task.id,
+          workerId: worker.id,
+          kind: "repo",
+          title: "CLI architecture",
+        }),
+      ]),
+    );
+  });
+
+  it("enforces worker lifecycle transitions", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Run worker lifecycle checks" });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "executor",
+    });
+
+    await storeModule.updateCodeWorkerSessionStatus(worker.id, "running");
+    await storeModule.updateCodeWorkerSessionStatus(worker.id, "awaiting_review");
+
+    await expect(storeModule.updateCodeWorkerSessionStatus(worker.id, "queued")).rejects.toThrow(
+      'Invalid worker transition from "awaiting_review" to "queued"',
+    );
+  });
+
+  it("builds a summary with status counts and pending review focus", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Prepare review lane",
+      status: "review",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "reviewer",
+      status: "awaiting_review",
+      lane: "review",
+    });
+    await storeModule.createCodeReviewRequest({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Validate review lane",
+    });
+
+    const summary = await storeModule.getCodeCockpitSummary();
+
+    expect(summary.totals).toMatchObject({
+      tasks: 1,
+      workers: 1,
+      reviews: 1,
+    });
+    expect(summary.taskStatusCounts.review).toBe(1);
+    expect(summary.workerStatusCounts.awaiting_review).toBe(1);
+    expect(summary.reviewStatusCounts.pending).toBe(1);
+    expect(summary.pendingReviews[0]).toMatchObject({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Validate review lane",
+    });
+  });
+
+  it("builds a workspace summary with active lanes and recent runs", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Ship the cockpit shell",
+      repoRoot: "/tmp/openclaw",
+      status: "in_progress",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "shell-lane",
+      status: "running",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/shell-lane",
+      branch: "code/task/shell-lane",
+    });
+    const run = await storeModule.createCodeRun({
+      taskId: task.id,
+      workerId: worker.id,
+      status: "running",
+      summary: "Rendering the cockpit shell",
+      backendId: "codex-cli",
+      startedAt: "2026-03-19T12:00:00.000Z",
+    });
+    await storeModule.updateCodeWorkerSession(worker.id, {
+      activeRunId: run.id,
+      backendId: "codex-cli",
+      lastStartedAt: "2026-03-19T12:00:00.000Z",
+    });
+    const review = await storeModule.createCodeReviewRequest({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Review cockpit shell",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.generatedAt).toMatch(/T/);
+    expect(summary.recentRuns[0]).toMatchObject({
+      id: run.id,
+      workerId: worker.id,
+      status: "running",
+    });
+    expect(summary.activeLanes[0]).toMatchObject({
+      workerId: worker.id,
+      workerName: "shell-lane",
+      taskId: task.id,
+      taskTitle: "Ship the cockpit shell",
+      backendId: "codex-cli",
+    });
+    expect(summary.activeLanes[0].latestRun).toMatchObject({
+      id: run.id,
+      status: "running",
+    });
+    expect(summary.activeLanes[0].pendingReview).toMatchObject({
+      id: review.id,
+      title: "Review cockpit shell",
+    });
+  });
+});

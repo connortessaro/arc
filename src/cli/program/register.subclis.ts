@@ -182,6 +182,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "code",
+    description: "Coding cockpit for orchestrated local agent work",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../code-cli.js");
+      mod.registerCodeCli(program);
+    },
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,
