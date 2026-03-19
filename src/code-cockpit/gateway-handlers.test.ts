@@ -2,6 +2,56 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMethods = vi.hoisted(() => ({
   runtime: {
+    addTask: vi.fn(async ({ title, repoRoot }: { title: string; repoRoot?: string }) => ({
+      id: "task_123",
+      title,
+      repoRoot,
+      status: "queued",
+      priority: "normal",
+    })),
+    listTasks: vi.fn(async ({ repoRoot }: { repoRoot?: string }) => ({
+      storePath: "/tmp/openclaw/code-cockpit.json",
+      tasks: [{ id: "task_123", title: "Ship blocked queue", repoRoot, status: "queued" }],
+    })),
+    showTask: vi.fn(async ({ taskId }: { taskId: string }) => ({
+      storePath: "/tmp/openclaw/code-cockpit.json",
+      task: { id: taskId, title: "Ship blocked queue", status: "review" },
+      workers: [],
+      reviews: [],
+    })),
+    updateTaskStatus: vi.fn(async ({ taskId, status }: { taskId: string; status: string }) => ({
+      id: taskId,
+      title: "Ship blocked queue",
+      status,
+    })),
+    addReview: vi.fn(async ({ taskId, title }: { taskId: string; title: string }) => ({
+      id: "review_123",
+      taskId,
+      title,
+      status: "pending",
+    })),
+    listReviews: vi.fn(async ({ taskId }: { taskId?: string }) => ({
+      storePath: "/tmp/openclaw/code-cockpit.json",
+      reviews: [
+        {
+          id: "review_123",
+          taskId: taskId ?? "task_123",
+          title: "Review queue",
+          status: "pending",
+        },
+      ],
+    })),
+    resolveReviewStatus: vi.fn(
+      async ({ reviewId, status }: { reviewId: string; status: string }) => ({
+        review: { id: reviewId, taskId: "task_123", title: "Review queue", status },
+        task: {
+          id: "task_123",
+          title: "Ship blocked queue",
+          status: status === "approved" ? "done" : "in_progress",
+        },
+        worker: { id: "worker_123", status: status === "approved" ? "completed" : "failed" },
+      }),
+    ),
     startWorker: vi.fn(async ({ workerId }: { workerId: string }) => ({
       worker: { id: workerId, status: "running" },
       run: { id: "run_123", status: "running" },
@@ -83,6 +133,13 @@ vi.mock("../code-cockpit/runtime.js", () => runtimeMethods);
 
 beforeEach(() => {
   runtimeMethods.getCodeCockpitRuntime.mockClear();
+  runtimeMethods.runtime.addTask.mockClear();
+  runtimeMethods.runtime.listTasks.mockClear();
+  runtimeMethods.runtime.showTask.mockClear();
+  runtimeMethods.runtime.updateTaskStatus.mockClear();
+  runtimeMethods.runtime.addReview.mockClear();
+  runtimeMethods.runtime.listReviews.mockClear();
+  runtimeMethods.runtime.resolveReviewStatus.mockClear();
   runtimeMethods.runtime.startWorker.mockClear();
   runtimeMethods.runtime.sendWorker.mockClear();
   runtimeMethods.runtime.pauseWorker.mockClear();
@@ -142,6 +199,41 @@ describe("code cockpit gateway handlers", () => {
     );
   });
 
+  it("delegates task.add to the gateway-owned runtime", async () => {
+    const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
+    const respond = vi.fn();
+
+    await codeCockpitHandlers["code.task.add"]({
+      req: {
+        method: "code.task.add",
+        id: "1",
+        params: { title: "Ship blocked queue", repoRoot: "/srv/arc/repo" },
+      },
+      params: { title: "Ship blocked queue", repoRoot: "/srv/arc/repo" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(runtimeMethods.runtime.addTask).toHaveBeenCalledWith({
+      title: "Ship blocked queue",
+      repoRoot: "/srv/arc/repo",
+      goal: undefined,
+      notes: undefined,
+      priority: undefined,
+      status: undefined,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        id: "task_123",
+        title: "Ship blocked queue",
+      }),
+      undefined,
+    );
+  });
+
   it("delegates cockpit summary to the gateway-owned runtime", async () => {
     const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
     const respond = vi.fn();
@@ -162,6 +254,37 @@ describe("code cockpit gateway handlers", () => {
       expect.objectContaining({
         storePath: "/tmp/openclaw/code-cockpit.json",
         totals: expect.objectContaining({ workers: 1 }),
+      }),
+      undefined,
+    );
+  });
+
+  it("delegates review.status to the gateway-owned runtime", async () => {
+    const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
+    const respond = vi.fn();
+
+    await codeCockpitHandlers["code.review.status"]({
+      req: {
+        method: "code.review.status",
+        id: "1",
+        params: { reviewId: "review_123", status: "approved" },
+      },
+      params: { reviewId: "review_123", status: "approved" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(runtimeMethods.runtime.resolveReviewStatus).toHaveBeenCalledWith({
+      reviewId: "review_123",
+      status: "approved",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        review: expect.objectContaining({ id: "review_123", status: "approved" }),
+        task: expect.objectContaining({ id: "task_123", status: "done" }),
       }),
       undefined,
     );

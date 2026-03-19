@@ -23,6 +23,7 @@ Implemented:
 - VPS-first canonical repo/runtime workflow for async Arc development
 - Claude-first self-drive routing with Codex fallback on the VPS
 - review-gated self-drive with queue-first task selection and a 3-review cap
+- remote-aware `openclaw code task` / `review` commands so the VPS queue can be managed from the Mac CLI
 
 Not implemented yet:
 
@@ -44,6 +45,15 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/status.sh
 bash scripts/arc-self-drive/deploy.sh
 bash scripts/arc-self-drive/run-supervisor-tick.sh --repo /srv/arc/repo
+```
+
+Useful Mac-side queue commands when `gateway.mode=remote` targets the VPS:
+
+```bash
+openclaw code task add "Ship the next Arc feature" --repo /srv/arc/repo --priority high --json
+openclaw code task list --json
+openclaw code review list --json
+openclaw code review status review_123 approved --json
 ```
 
 Persist Claude for unattended service use:
@@ -125,6 +135,7 @@ The system is now split correctly:
 - OpenClaw owns worker orchestration and durable state
 - the macOS app owns the future cockpit UX
 - the VPS checkout is the canonical async development runtime
+- the Mac CLI can queue and review remote work without SSHing into the VPS
 - the Mac stays responsible for Swift/macOS verification
 
 The next work should make the native window useful, not broaden the backend

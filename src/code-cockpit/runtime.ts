@@ -16,6 +16,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit, SpawnInput } from "../process/supervisor/index.js";
 import {
+  type CreateCodeReviewRequestInput,
+  type CreateCodeTaskInput,
   createCodeTask,
   createCodeReviewRequest,
   createCodeRun,
@@ -26,12 +28,16 @@ import {
   loadCodeCockpitStore,
   type CodeWorkerAuthHealth,
   type CodeWorkerEngineId,
+  type CodeReviewStatus,
   type CodeReviewRequest,
+  type CodeResolvedReviewResult,
   type CodeRun,
   type CodeCockpitWorkspaceSummary,
   type CodeTask,
+  type CodeTaskStatus,
   type CodeWorkerSession,
   resolveCodeCockpitStorePath,
+  resolveCodeReviewRequestStatus,
   updateCodeRun,
   updateCodeTaskStatus,
   updateCodeWorkerSession,
@@ -117,6 +123,23 @@ export type ReadCodeWorkerLogsResult = {
   latestRun: CodeRun | null;
   stdoutTail: string;
   stderrTail: string;
+};
+
+export type ListCodeTasksResult = {
+  storePath: string;
+  tasks: CodeTask[];
+};
+
+export type ShowCodeTaskResult = {
+  storePath: string;
+  task: CodeTask;
+  workers: CodeWorkerSession[];
+  reviews: CodeReviewRequest[];
+};
+
+export type ListCodeReviewsResult = {
+  storePath: string;
+  reviews: CodeReviewRequest[];
 };
 
 export type CodeSupervisorTickInput = {
@@ -1208,6 +1231,89 @@ class CodeCockpitRuntime {
       stdoutTail: await readTail(latestRun?.stdoutLogPath, active?.stdoutTail),
       stderrTail: await readTail(latestRun?.stderrLogPath, active?.stderrTail),
     };
+  }
+
+  async addTask(params: CreateCodeTaskInput): Promise<CodeTask> {
+    await this.ensureInitialized();
+    return await createCodeTask(params);
+  }
+
+  async listTasks(
+    params: {
+      repoRoot?: string;
+      status?: CodeTaskStatus;
+    } = {},
+  ): Promise<ListCodeTasksResult> {
+    await this.ensureInitialized();
+    const store = await loadCodeCockpitStore();
+    const repoRoot = normalizeString(params.repoRoot);
+    const tasks = [...store.tasks]
+      .filter((task) => (params.status ? task.status === params.status : true))
+      .filter((task) => (repoRoot ? task.repoRoot === repoRoot : true))
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return {
+      storePath: resolveCodeCockpitStorePath(),
+      tasks,
+    };
+  }
+
+  async showTask(params: { taskId: string }): Promise<ShowCodeTaskResult> {
+    await this.ensureInitialized();
+    const store = await loadCodeCockpitStore();
+    const task = store.tasks.find((entry) => entry.id === params.taskId);
+    if (!task) {
+      throw new Error(`Task "${params.taskId}" not found`);
+    }
+    const workers = [...store.workers]
+      .filter((entry) => entry.taskId === task.id)
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const reviews = [...store.reviews]
+      .filter((entry) => entry.taskId === task.id)
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return {
+      storePath: resolveCodeCockpitStorePath(),
+      task,
+      workers,
+      reviews,
+    };
+  }
+
+  async updateTaskStatus(params: { taskId: string; status: CodeTaskStatus }): Promise<CodeTask> {
+    await this.ensureInitialized();
+    return await updateCodeTaskStatus(params.taskId, params.status);
+  }
+
+  async addReview(params: CreateCodeReviewRequestInput): Promise<CodeReviewRequest> {
+    await this.ensureInitialized();
+    return await createCodeReviewRequest(params);
+  }
+
+  async listReviews(
+    params: {
+      taskId?: string;
+      workerId?: string;
+      status?: CodeReviewStatus;
+    } = {},
+  ): Promise<ListCodeReviewsResult> {
+    await this.ensureInitialized();
+    const store = await loadCodeCockpitStore();
+    const reviews = [...store.reviews]
+      .filter((review) => (params.taskId ? review.taskId === params.taskId : true))
+      .filter((review) => (params.workerId ? review.workerId === params.workerId : true))
+      .filter((review) => (params.status ? review.status === params.status : true))
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return {
+      storePath: resolveCodeCockpitStorePath(),
+      reviews,
+    };
+  }
+
+  async resolveReviewStatus(params: {
+    reviewId: string;
+    status: CodeReviewStatus;
+  }): Promise<CodeResolvedReviewResult> {
+    await this.ensureInitialized();
+    return await resolveCodeReviewRequestStatus(params.reviewId, params.status);
   }
 
   async supervisorTick(params: CodeSupervisorTickInput = {}): Promise<CodeSupervisorTickResult> {

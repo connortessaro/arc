@@ -3,6 +3,7 @@
 Arc can now run a constrained self-drive loop on the VPS:
 
 - it bootstraps work from `docs/cockpit/FAST-TODO.md`
+- it accepts queued task and review updates over the remote gateway, so you can steer it from your Mac CLI without SSHing into the VPS
 - it creates isolated worktree workers
 - it keeps polling for the next eligible worker without waiting for chat prompts
 - it allows local branch commits
@@ -15,6 +16,14 @@ Run one supervisor cycle through the gateway:
 
 ```bash
 openclaw code supervisor tick --repo /srv/arc/repo --json
+```
+
+Queue a new Arc task from your Mac when `gateway.mode=remote` points at the VPS:
+
+```bash
+openclaw code task add "Build the next Arc feature" --repo /srv/arc/repo --priority high --json
+openclaw code review list --json
+openclaw code review status review_123 approved --json
 ```
 
 Run one supervisor cycle directly from source on the VPS:
@@ -80,6 +89,7 @@ Install notes:
 - default engine order is Claude first, then Codex as fallback when Claude is unavailable or cooling down after a usage-limit failure
 - Claude becomes fully unattended only after its token is persisted into the service env file
 - task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`
+- `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can be managed from the Mac CLI
 - completed work lands in review; self-drive pauses new work when there are 3 pending reviews
 - `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled
