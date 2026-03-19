@@ -72,11 +72,12 @@ Install notes:
 - the systemd units now read `~/.config/arc-self-drive/engine.env` if it exists
 - `healthcheck.sh` reports whether that env file exists, so unattended auth drift is visible
 - add `[engine:claude]` or `[engine:codex]` to a task title/goal/notes when a task must use one engine
+- if Claude hits a usage-limit or rate-limit style failure, self-drive cools it down for six hours and lets Codex carry the queue
 
 ## Current Policy
 
 - one worker per supervisor tick
-- default engine order is Codex first, then Claude as fallback when Codex is unavailable
+- default engine order is Claude first, then Codex as fallback when Claude is unavailable or cooling down after a usage-limit failure
 - Claude becomes fully unattended only after its token is persisted into the service env file
 - self-drive tasks are imported from unchecked items in `docs/cockpit/FAST-TODO.md`
 - completed work lands in review; self-drive does not push or merge

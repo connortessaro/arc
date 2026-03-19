@@ -21,6 +21,7 @@ Implemented:
 - self-drive supervisor loop with Codex and Claude worker engines
 - source-based VPS gateway runner and self-drive systemd installer
 - VPS-first canonical repo/runtime workflow for async Arc development
+- Claude-first self-drive routing with Codex fallback on the VPS
 
 Not implemented yet:
 

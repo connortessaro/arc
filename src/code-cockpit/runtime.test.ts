@@ -710,7 +710,7 @@ describe("code cockpit runtime", () => {
     );
   });
 
-  it("falls back to Claude when Codex is unhealthy but Claude is available", async () => {
+  it("prefers Claude when both engines are healthy", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
     await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
@@ -737,7 +737,7 @@ describe("code cockpit runtime", () => {
         backend: input,
       }),
       runCommandWithTimeout: createRunCommandWithEngineHealthStub({
-        codexHealthy: false,
+        codexHealthy: true,
         claudeHealthy: true,
       }),
     });
@@ -753,6 +753,115 @@ describe("code cockpit runtime", () => {
     });
     expect(pendingRuns).toHaveLength(1);
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["claude", "-p"]));
+  });
+
+  it("falls back to Codex when Claude is unhealthy", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] Implement the remote review queue\n",
+      "utf8",
+    );
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: false,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.worker).toMatchObject({
+      engineId: "codex",
+      engineModel: "gpt-5.4",
+      backendId: "codex-cli",
+      authHealth: "healthy",
+    });
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
+  });
+
+  it("falls back to Codex when Claude recently failed with a usage-limit style auth error", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] Keep self-drive moving on the VPS\n",
+      "utf8",
+    );
+
+    const task = await store.createCodeTask({
+      title: "Previous Claude run",
+      repoRoot: tempRepoRoot,
+    });
+    await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "Claude Exhausted",
+      repoRoot: tempRepoRoot,
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+      status: "failed",
+      authHealth: "expired",
+    });
+    const savedStore = await store.loadCodeCockpitStore();
+    const savedWorker = savedStore.workers.find((entry) => entry.name === "Claude Exhausted");
+    expect(savedWorker).toBeTruthy();
+    if (!savedWorker) {
+      throw new Error("Expected saved worker");
+    }
+    await store.updateCodeWorkerSession(savedWorker.id, {
+      lastExitReason: "failed",
+      lastExitedAt: new Date().toISOString(),
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.worker?.engineId).toBe("codex");
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
   });
 
   it("blocks a preferred-engine task when its requested engine is unavailable", async () => {
