@@ -15,12 +15,28 @@ struct CockpitWindow: View {
                     Text(self.store.snapshot?.storePath ?? "OpenClaw-powered operator workspace")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let projectRoot = self.store.projectRootLabel {
+                        Text(projectRoot)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer()
                 if self.store.isLoading {
                     ProgressView()
                         .controlSize(.small)
                 }
+                Button {
+                    Task { await self.store.startNextWorker() }
+                } label: {
+                    if self.store.isStartingNextWorker {
+                        Label("Starting…", systemImage: "play.square.fill")
+                    } else {
+                        Label("Start Next Worker", systemImage: "play.square.fill")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isStartingNextWorker || !self.store.canStartNextWorker)
                 Button {
                     Task { await self.store.refresh() }
                 } label: {
@@ -75,7 +91,7 @@ struct CockpitWindow: View {
                 ContentUnavailableView(
                     "No cockpit data yet",
                     systemImage: "rectangle.3.group",
-                    description: Text("Start a worker or refresh after the gateway is ready."))
+                    description: Text("Use Start Next Worker to import work from FAST-TODO after the gateway is ready."))
             }
         }
         .padding(20)
@@ -264,10 +280,10 @@ private struct CockpitLaneSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Active Lanes")
+            Text("Workers")
                 .font(.title3.weight(.semibold))
             if self.lanes.isEmpty {
-                sectionPlaceholder("No active lanes. Start a worker to populate the cockpit.")
+                sectionPlaceholder("No workers yet. Start the next worker to populate the cockpit.")
             } else {
                 LazyVGrid(columns: self.columns, alignment: .leading, spacing: 12) {
                     ForEach(self.lanes) { lane in

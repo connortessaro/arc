@@ -266,4 +266,40 @@ describe("code cockpit store", () => {
       title: "Review cockpit shell",
     });
   });
+
+  it("keeps failed workers in the lane summary so they stay manageable", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Retry a failed worker",
+      repoRoot: "/tmp/openclaw",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "retry-worker",
+      status: "failed",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+    const run = await storeModule.createCodeRun({
+      taskId: task.id,
+      workerId: worker.id,
+      status: "failed",
+      summary: "Last run timed out",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.activeLanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          workerId: worker.id,
+          status: "failed",
+          latestRun: expect.objectContaining({
+            id: run.id,
+            status: "failed",
+          }),
+        }),
+      ]),
+    );
+  });
 });

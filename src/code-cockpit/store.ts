@@ -1120,7 +1120,7 @@ export async function getCodeCockpitWorkspaceSummary(
   }
 
   const activeLanes = sortByUpdatedAt(store.workers)
-    .filter((worker) => !["completed", "failed", "cancelled"].includes(worker.status))
+    .filter((worker) => worker.status !== "completed")
     .slice(0, 6)
     .flatMap((worker): CodeCockpitLaneSummary[] => {
       const task = taskById.get(worker.taskId);

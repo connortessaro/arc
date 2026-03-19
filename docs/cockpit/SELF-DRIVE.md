@@ -37,6 +37,20 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/install-systemd.sh
 ```
 
+Deploy the current branch to the VPS checkout and restart the runtime cleanly:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/deploy.sh
+```
+
+Inspect the current self-drive queue, running workers, and latest runs:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/status.sh
+```
+
 Install notes:
 
 - the installer also rewrites `~/.openclaw/openclaw.json` so:
@@ -51,3 +65,4 @@ Install notes:
 - Claude is available as an engine adapter when the CLI is installed and authenticated
 - self-drive tasks are imported from unchecked items in `docs/cockpit/FAST-TODO.md`
 - completed work lands in review; self-drive does not push or merge
+- `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites CLI backend config, restarts the gateway, and leaves the timer enabled

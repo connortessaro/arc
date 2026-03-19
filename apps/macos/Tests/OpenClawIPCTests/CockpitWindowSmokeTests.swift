@@ -29,4 +29,11 @@ struct CockpitWindowSmokeTests {
         let view = CockpitWindow(store: store)
         _ = view.body
     }
+
+    @Test func `cockpit window builds empty state with start next worker controls`() {
+        let store = CockpitStore(isPreview: true)
+        store.gatewayStatus = .previewLocal
+        let view = CockpitWindow(store: store)
+        _ = view.body
+    }
 }

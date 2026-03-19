@@ -194,6 +194,14 @@ struct CockpitWorkerLogs: Codable, Sendable {
     let stderrTail: String
 }
 
+struct CockpitSupervisorTickResult: Codable, Sendable {
+    let action: String
+    let reason: String?
+    let task: CockpitTaskSummary?
+    let worker: CockpitWorkerSummary?
+    let run: CockpitRunSummary?
+}
+
 struct CockpitWorkspaceSummary: Codable, Sendable {
     let storePath: String
     let generatedAt: String

@@ -7,6 +7,7 @@ actor CockpitStoreRecorder {
     private(set) var gatewayStatusLoads = 0
     private(set) var logRequests: [String] = []
     private(set) var actions: [String] = []
+    private(set) var supervisorTicks: [String?] = []
     private(set) var remoteReconnects = 0
 
     func loadSummary(_ summary: CockpitWorkspaceSummary) -> CockpitWorkspaceSummary {
@@ -26,6 +27,10 @@ actor CockpitStoreRecorder {
 
     func perform(action: CockpitWorkerAction, workerId: String) {
         self.actions.append("\(action.rawValue):\(workerId)")
+    }
+
+    func performSupervisorTick(repoRoot: String?) {
+        self.supervisorTicks.append(repoRoot)
     }
 
     func reconnectRemoteGateway() {
@@ -99,6 +104,65 @@ struct CockpitStoreTests {
         #expect(summaryLoads == 2)
         #expect(logRequests == ["worker_shell", "worker_shell"])
         #expect(store.gatewayStatus == expectedGatewayStatus)
+    }
+
+    @Test func `start next worker dispatch refreshes summary and selects returned worker`() async {
+        let refreshed = CockpitWorkspaceSummary.preview
+        let expectedLogs = CockpitWorkerLogs.preview(workerId: "worker_review")
+        let expectedGatewayStatus = CockpitGatewayStatus(
+            mode: .local,
+            state: .ready,
+            endpointLabel: "127.0.0.1:18789",
+            detail: nil)
+        let recorder = CockpitStoreRecorder()
+        let startedWorker = CockpitWorkerSummary(
+            id: "worker_review",
+            taskId: "task_review",
+            name: "review-lane",
+            status: "running",
+            lane: "review",
+            repoRoot: "/Users/tessaro/openclaw",
+            worktreePath: "/Users/tessaro/openclaw/.worktrees/code/review-lane",
+            branch: "code/task_review/review-lane",
+            backendId: "codex-cli",
+            activeRunId: "run_review",
+            updatedAt: "2026-03-19T13:02:00.000Z")
+
+        let store = CockpitStore(
+            isPreview: false,
+            loadGatewayStatus: {
+                await recorder.loadGatewayStatus(expectedGatewayStatus)
+            },
+            loadSummary: {
+                await recorder.loadSummary(refreshed)
+            },
+            loadWorkerLogs: { workerId in
+                await recorder.loadLogs(workerId: workerId, logs: expectedLogs)
+            },
+            performSupervisorTick: { repoRoot in
+                await recorder.performSupervisorTick(repoRoot: repoRoot)
+                return CockpitSupervisorTickResult(
+                    action: "started",
+                    reason: nil,
+                    task: nil,
+                    worker: startedWorker,
+                    run: nil)
+            })
+
+        await store.refresh()
+        await store.startNextWorker()
+
+        let supervisorTicks = await recorder.supervisorTicks
+        let gatewayStatusLoads = await recorder.gatewayStatusLoads
+        let summaryLoads = await recorder.summaryLoads
+        let logRequests = await recorder.logRequests
+
+        #expect(supervisorTicks == ["/Users/tessaro/openclaw"])
+        #expect(gatewayStatusLoads == 2)
+        #expect(summaryLoads == 2)
+        #expect(logRequests == ["worker_shell", "worker_review"])
+        #expect(store.selectedWorkerId == "worker_review")
+        #expect(store.selectedWorkerLogs?.workerId == "worker_review")
     }
 
     @Test func `remote reconnect refreshes gateway status and summary`() async {
