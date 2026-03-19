@@ -164,9 +164,13 @@ it will warn and recommend moving back to a local path.
 
 ## Build & dev workflow (native)
 
-- `cd apps/macos && swift build`
-- `swift run OpenClaw` (or Xcode)
+- `source scripts/use-xcode-developer-dir.sh && cd apps/macos && swift build`
+- `source scripts/use-xcode-developer-dir.sh && cd apps/macos && swift run OpenClaw` (or Xcode)
 - Package app: `scripts/package-mac-app.sh`
+
+When your active developer dir is `CommandLineTools`, the helper above exports
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` automatically so the
+SwiftUI macro/plugin packages in the macOS app resolve correctly.
 
 ## Debug gateway connectivity (macOS CLI)
 

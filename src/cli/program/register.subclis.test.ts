@@ -18,6 +18,14 @@ const { nodesAction, registerNodesCli } = vi.hoisted(() => {
   return { nodesAction: action, registerNodesCli: register };
 });
 
+const { codeAction, registerCodeCli } = vi.hoisted(() => {
+  const action = vi.fn();
+  const register = vi.fn((program: Command) => {
+    program.command("code").action(action);
+  });
+  return { codeAction: action, registerCodeCli: register };
+});
+
 const configModule = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -25,6 +33,7 @@ const configModule = vi.hoisted(() => ({
 
 vi.mock("../acp-cli.js", () => ({ registerAcpCli }));
 vi.mock("../nodes-cli.js", () => ({ registerNodesCli }));
+vi.mock("../code-cli.js", () => ({ registerCodeCli }));
 vi.mock("../../config/config.js", () => configModule);
 
 const { loadValidatedConfigForPluginRegistration, registerSubCliByName, registerSubCliCommands } =
@@ -54,6 +63,8 @@ describe("registerSubCliCommands", () => {
     acpAction.mockClear();
     registerNodesCli.mockClear();
     nodesAction.mockClear();
+    registerCodeCli.mockClear();
+    codeAction.mockClear();
     configModule.loadConfig.mockReset();
     configModule.readConfigFileSnapshot.mockReset();
   });
@@ -132,5 +143,16 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches the lazy code command", async () => {
+    const program = createRegisteredProgram(["node", "openclaw", "code"], "openclaw");
+
+    expect(program.commands.map((cmd) => cmd.name())).toEqual(["code"]);
+
+    await program.parseAsync(["code"], { from: "user" });
+
+    expect(registerCodeCli).toHaveBeenCalledTimes(1);
+    expect(codeAction).toHaveBeenCalledTimes(1);
   });
 });

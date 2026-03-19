@@ -114,6 +114,11 @@ struct MenuContent: View {
                 Label("Open Dashboard", systemImage: "gauge")
             }
             Button {
+                CockpitWindowManager.shared.show()
+            } label: {
+                Label("Open Arc", systemImage: "rectangle.3.group")
+            }
+            Button {
                 Task { @MainActor in
                     let sessionKey = await WebChatManager.shared.preferredSessionKey()
                     WebChatManager.shared.show(sessionKey: sessionKey)

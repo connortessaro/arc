@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")/../apps/macos"
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=./use-xcode-developer-dir.sh
+source "${ROOT_DIR}/scripts/use-xcode-developer-dir.sh"
+
+cd "${ROOT_DIR}/apps/macos"
 
 BUILD_PATH=".build-local"
 PRODUCT="OpenClaw"

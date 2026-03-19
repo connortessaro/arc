@@ -1,5 +1,10 @@
 # OpenClaw macOS app (dev + signing)
 
+The macOS scripts auto-select `/Applications/Xcode.app/Contents/Developer`
+when your active developer dir is only Command Line Tools. Override with
+`DEVELOPER_DIR=...` or `OPENCLAW_XCODE_APP=...` if your Xcode install lives
+elsewhere.
+
 ## Quick dev run
 
 ```bash
@@ -21,6 +26,17 @@ scripts/package-mac-app.sh
 ```
 
 Creates `dist/OpenClaw.app` and signs it via `scripts/codesign-mac-app.sh`.
+
+## Manual Swift commands
+
+If you invoke `swift build`, `swift run`, or `swift test` directly in
+`apps/macos`, use the full Xcode toolchain:
+
+```bash
+source scripts/use-xcode-developer-dir.sh
+cd apps/macos
+swift test --filter CockpitWindowSmokeTests
+```
 
 ## Signing behavior
 

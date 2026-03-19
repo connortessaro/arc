@@ -86,6 +86,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "talk.config",
     "agents.files.list",
     "agents.files.get",
+    "code.cockpit.summary",
+    "code.worker.show",
+    "code.worker.logs",
   ],
   [WRITE_SCOPE]: [
     "send",
@@ -105,6 +108,11 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "browser.request",
     "push.test",
     "node.pending.enqueue",
+    "code.worker.start",
+    "code.worker.send",
+    "code.worker.pause",
+    "code.worker.resume",
+    "code.worker.cancel",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",

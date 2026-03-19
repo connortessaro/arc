@@ -75,6 +75,15 @@ xcrun swift --version
 
 If versions don’t match, update macOS/Xcode and re-run the build.
 
+If `xcode-select -p` points at `/Library/Developer/CommandLineTools`, prefer the
+full Xcode toolchain before running manual Swift commands:
+
+```bash
+source scripts/use-xcode-developer-dir.sh
+cd apps/macos
+swift test --filter CockpitWindowSmokeTests
+```
+
 ### App Crashes on Permission Grant
 
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
