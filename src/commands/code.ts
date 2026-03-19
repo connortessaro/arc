@@ -34,6 +34,7 @@ import {
   updateCodeTaskStatus,
   updateCodeWorkerSessionStatus,
 } from "../code-cockpit/store.js";
+import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -365,6 +366,10 @@ function buildStoreOptions(): CodeCockpitStoreOptions {
   return {};
 }
 
+function shouldUseRemoteCodeGateway(): boolean {
+  return loadConfig().gateway?.mode === "remote";
+}
+
 async function callCodeGateway<T>(method: string, params: Record<string, unknown>): Promise<T> {
   return await callGateway<T>({
     method,
@@ -378,6 +383,36 @@ export async function codeSummaryCommand(
   opts: CodeSummaryOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  if (shouldUseRemoteCodeGateway()) {
+    const summary = await callCodeGateway<Awaited<ReturnType<typeof getCodeCockpitSummary>>>(
+      "code.cockpit.summary",
+      {},
+    );
+    if (opts.json) {
+      emitJson(runtime, summary);
+      return;
+    }
+
+    runtime.log(isRich() ? theme.heading("Coding Cockpit") : "Coding Cockpit");
+    runtime.log(`Store: ${shortenHomePath(summary.storePath)}`);
+    runtime.log(
+      `Tasks: ${summary.totals.tasks} (${formatCounts(summary.taskStatusCounts) || "none"})`,
+    );
+    runtime.log(
+      `Workers: ${summary.totals.workers} (${formatCounts(summary.workerStatusCounts) || "none"})`,
+    );
+    runtime.log(
+      `Reviews: ${summary.totals.reviews} (${formatCounts(summary.reviewStatusCounts) || "none"})`,
+    );
+    runtime.log(
+      `Memory: ${summary.totals.contextSnapshots} snapshots, ${summary.totals.decisions} decisions, ${summary.totals.runs} runs`,
+    );
+    printSection(runtime, "Recent Tasks", summary.recentTasks.map(describeTask));
+    printSection(runtime, "Recent Workers", summary.recentWorkers.map(describeWorker));
+    printSection(runtime, "Pending Reviews", summary.pendingReviews.map(describeReview));
+    return;
+  }
+
   const summary = await getCodeCockpitSummary(buildStoreOptions());
   if (opts.json) {
     emitJson(runtime, summary);
@@ -408,6 +443,19 @@ export async function codeTaskAddCommand(
   opts: CodeTaskAddOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  if (shouldUseRemoteCodeGateway()) {
+    const task = await callCodeGateway<CodeTask>("code.task.add", {
+      title,
+      repoRoot: resolveCodePath(opts.repo),
+      goal: opts.goal,
+      notes: opts.notes,
+      priority: ensureTaskPriority(opts.priority),
+      status: ensureTaskStatus(opts.status),
+    });
+    emitEntity(runtime, opts.json, task, [`Created task ${describeTask(task)}`]);
+    return;
+  }
+
   const task = await createCodeTask(
     {
       title,
@@ -427,6 +475,22 @@ export async function codeTaskListCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   ensureTaskStatus(opts.status);
+  if (shouldUseRemoteCodeGateway()) {
+    const payload = await callCodeGateway<{
+      storePath: string;
+      tasks: CodeTask[];
+    }>("code.task.list", {
+      status: opts.status,
+      repoRoot: resolveCodePath(opts.repo),
+    });
+    if (opts.json) {
+      emitJson(runtime, payload);
+      return;
+    }
+    runtime.log(`Store: ${shortenHomePath(payload.storePath)}`);
+    printSection(runtime, "Tasks", payload.tasks.map(describeTask));
+    return;
+  }
   const store = await loadCodeCockpitStore(buildStoreOptions());
   const tasks = filterTasks(store, opts);
   const storePath = resolveCodeCockpitStorePath(buildStoreOptions());
@@ -443,6 +507,29 @@ export async function codeTaskShowCommand(
   opts: CodeTaskShowOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  if (shouldUseRemoteCodeGateway()) {
+    const payload = await callCodeGateway<{
+      storePath: string;
+      task: CodeTask;
+      workers: CodeWorkerSession[];
+      reviews: CodeReviewRequest[];
+    }>("code.task.show", { taskId });
+    if (opts.json) {
+      emitJson(runtime, payload);
+      return;
+    }
+    runtime.log(describeTask(payload.task));
+    if (payload.task.goal) {
+      runtime.log(`  goal: ${payload.task.goal}`);
+    }
+    if (payload.task.notes) {
+      runtime.log(`  notes: ${payload.task.notes}`);
+    }
+    printSection(runtime, "Workers", payload.workers.map(describeWorker));
+    printSection(runtime, "Reviews", payload.reviews.map(describeReview));
+    return;
+  }
+
   const store = await loadCodeCockpitStore(buildStoreOptions());
   const task = store.tasks.find((entry) => entry.id === taskId);
   if (!task) {
@@ -477,11 +564,16 @@ export async function codeTaskStatusCommand(
   opts: CodeTaskStatusOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const updated = await updateCodeTaskStatus(
-    taskId,
-    ensureTaskStatus(status) ?? "queued",
-    buildStoreOptions(),
-  );
+  const nextStatus = ensureTaskStatus(status) ?? "queued";
+  if (shouldUseRemoteCodeGateway()) {
+    const updated = await callCodeGateway<CodeTask>("code.task.status", {
+      taskId,
+      status: nextStatus,
+    });
+    emitEntity(runtime, opts.json, updated, [`Updated task ${describeTask(updated)}`]);
+    return;
+  }
+  const updated = await updateCodeTaskStatus(taskId, nextStatus, buildStoreOptions());
   emitEntity(runtime, opts.json, updated, [`Updated task ${describeTask(updated)}`]);
 }
 
@@ -712,6 +804,18 @@ export async function codeReviewAddCommand(
   if (!opts.task) {
     throw new Error("--task is required");
   }
+  if (shouldUseRemoteCodeGateway()) {
+    const review = await callCodeGateway<CodeReviewRequest>("code.review.add", {
+      taskId: opts.task,
+      workerId: opts.worker,
+      title,
+      summary: opts.summary,
+      notes: opts.notes,
+      status: ensureReviewStatus(opts.status),
+    });
+    emitEntity(runtime, opts.json, review, [`Created review ${describeReview(review)}`]);
+    return;
+  }
   const review = await createCodeReviewRequest(
     {
       taskId: opts.task,
@@ -731,6 +835,23 @@ export async function codeReviewListCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   ensureReviewStatus(opts.status);
+  if (shouldUseRemoteCodeGateway()) {
+    const payload = await callCodeGateway<{
+      storePath: string;
+      reviews: CodeReviewRequest[];
+    }>("code.review.list", {
+      taskId: opts.task,
+      workerId: opts.worker,
+      status: opts.status,
+    });
+    if (opts.json) {
+      emitJson(runtime, payload);
+      return;
+    }
+    runtime.log(`Store: ${shortenHomePath(payload.storePath)}`);
+    printSection(runtime, "Reviews", payload.reviews.map(describeReview));
+    return;
+  }
   const store = await loadCodeCockpitStore(buildStoreOptions());
   const reviews = filterReviews(store, opts);
   const storePath = resolveCodeCockpitStorePath(buildStoreOptions());
@@ -748,11 +869,28 @@ export async function codeReviewStatusCommand(
   opts: CodeReviewStatusOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const resolved = await resolveCodeReviewRequestStatus(
-    reviewId,
-    ensureReviewStatus(status) ?? "pending",
-    buildStoreOptions(),
-  );
+  const nextStatus = ensureReviewStatus(status) ?? "pending";
+  if (shouldUseRemoteCodeGateway()) {
+    const resolved = await callCodeGateway<{
+      review: CodeReviewRequest;
+      task: CodeTask;
+      worker: CodeWorkerSession | null;
+    }>("code.review.status", {
+      reviewId,
+      status: nextStatus,
+    });
+    if (opts.json) {
+      emitJson(runtime, resolved);
+      return;
+    }
+    runtime.log(`Updated review ${describeReview(resolved.review)}`);
+    runtime.log(`Task ${describeTask(resolved.task)}`);
+    if (resolved.worker) {
+      runtime.log(`Worker ${describeWorker(resolved.worker)}`);
+    }
+    return;
+  }
+  const resolved = await resolveCodeReviewRequestStatus(reviewId, nextStatus, buildStoreOptions());
   if (opts.json) {
     emitJson(runtime, resolved);
     return;
