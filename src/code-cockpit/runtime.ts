@@ -16,12 +16,16 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit, SpawnInput } from "../process/supervisor/index.js";
 import {
+  createCodeTask,
   createCodeReviewRequest,
   createCodeRun,
+  createCodeWorkerSession,
   getCodeCockpitWorkspaceSummary,
   getCodeRun,
   getCodeWorkerSession,
   loadCodeCockpitStore,
+  type CodeWorkerAuthHealth,
+  type CodeWorkerEngineId,
   type CodeReviewRequest,
   type CodeRun,
   type CodeCockpitWorkspaceSummary,
@@ -29,13 +33,36 @@ import {
   type CodeWorkerSession,
   resolveCodeCockpitStorePath,
   updateCodeRun,
+  updateCodeTaskStatus,
   updateCodeWorkerSession,
 } from "./store.js";
 
-const DEFAULT_WORKER_BACKEND_ID = "codex-cli";
 const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
+const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
+const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
+const SELF_DRIVE_POLICY =
+  "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
+
+type WorkerEngineAdapter = {
+  engineId: CodeWorkerEngineId;
+  backendId: string;
+  defaultModel: string;
+};
+
+const WORKER_ENGINE_ADAPTERS: Record<CodeWorkerEngineId, WorkerEngineAdapter> = {
+  codex: {
+    engineId: "codex",
+    backendId: "codex-cli",
+    defaultModel: DEFAULT_CODEX_WORKER_MODEL,
+  },
+  claude: {
+    engineId: "claude",
+    backendId: "claude-cli",
+    defaultModel: DEFAULT_CLAUDE_WORKER_MODEL,
+  },
+};
 
 type WorkerStopIntent = "paused" | "cancelled" | null;
 
@@ -82,6 +109,25 @@ export type ReadCodeWorkerLogsResult = {
   stderrTail: string;
 };
 
+export type CodeSupervisorTickInput = {
+  repoRoot?: string;
+};
+
+export type CodeSupervisorTickResult = {
+  action: "noop" | "started" | "resumed";
+  reason?: string;
+  task?: CodeTask;
+  worker?: CodeWorkerSession;
+  run?: CodeRun;
+};
+
+const TASK_PRIORITY_ORDER: Record<string, number> = {
+  urgent: 0,
+  high: 1,
+  normal: 2,
+  low: 3,
+};
+
 function nowIso(now: () => Date): string {
   return now().toISOString();
 }
@@ -98,6 +144,73 @@ function slugifyWorkerName(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized || "worker";
+}
+
+function resolveWorkerEngineId(worker: CodeWorkerSession): CodeWorkerEngineId {
+  if (worker.engineId === "claude" || worker.backendId === "claude-cli") {
+    return "claude";
+  }
+  return "codex";
+}
+
+function resolveWorkerEngineAdapter(worker: CodeWorkerSession): WorkerEngineAdapter {
+  return WORKER_ENGINE_ADAPTERS[resolveWorkerEngineId(worker)];
+}
+
+function inferAuthHealth(params: {
+  stdout?: string;
+  stderr?: string;
+  success: boolean;
+}): CodeWorkerAuthHealth {
+  if (params.success) {
+    return "healthy";
+  }
+  const haystack = `${params.stderr ?? ""}\n${params.stdout ?? ""}`.toLowerCase();
+  if (
+    /log in|login|reauth|oauth|auth expired|session expired|not supported when using .* account/.test(
+      haystack,
+    )
+  ) {
+    return "expired";
+  }
+  if (
+    /missing.*api key|missing.*token|no api key|no token|credential|credentials|unauthorized/.test(
+      haystack,
+    )
+  ) {
+    return "missing";
+  }
+  return "unknown";
+}
+
+function taskMatchesRepo(task: CodeTask, repoRoot?: string): boolean {
+  return !repoRoot || task.repoRoot === repoRoot;
+}
+
+function workerBlocksTask(worker: CodeWorkerSession): boolean {
+  return ["queued", "running", "paused", "awaiting_review", "awaiting_approval"].includes(
+    worker.status,
+  );
+}
+
+function buildSelfDriveWorkerName(
+  task: CodeTask,
+  existingWorkers: readonly CodeWorkerSession[],
+): string {
+  const count = existingWorkers.filter((entry) => entry.taskId === task.id).length + 1;
+  return `self-drive-${task.id.replace(/^task_/, "")}-${count}`;
+}
+
+function buildSelfDriveObjective(task: CodeTask): string {
+  const taskFocus = task.goal?.trim() || task.notes?.trim() || task.title;
+  return `${taskFocus}\n\n${SELF_DRIVE_POLICY}`;
+}
+
+function parseFastTodoItems(markdown: string): string[] {
+  return markdown
+    .split(/\r?\n/g)
+    .map((line) => line.match(/^- \[ \] (.+)$/)?.[1]?.trim() ?? "")
+    .filter(Boolean);
 }
 
 function buildDefaultWorktreePath(repoRoot: string, worker: CodeWorkerSession): string {
@@ -352,11 +465,126 @@ class CodeCockpitRuntime {
     });
   }
 
+  private async bootstrapFastTodoTask(repoRoot: string): Promise<CodeTask | null> {
+    let markdown: string;
+    try {
+      markdown = await fs.readFile(path.join(repoRoot, FAST_TODO_RELATIVE_PATH), "utf8");
+    } catch {
+      return null;
+    }
+    const items = parseFastTodoItems(markdown);
+    if (items.length === 0) {
+      return null;
+    }
+    const store = await loadCodeCockpitStore();
+    for (const title of items) {
+      const existing = store.tasks.find(
+        (entry) =>
+          entry.title === title &&
+          entry.repoRoot === repoRoot &&
+          entry.status !== "done" &&
+          entry.status !== "cancelled",
+      );
+      if (existing) {
+        return existing;
+      }
+      return await createCodeTask({
+        title,
+        repoRoot,
+        priority: "high",
+        goal: `Complete the FAST-TODO item: ${title}`,
+        notes: `Imported from ${FAST_TODO_RELATIVE_PATH}.`,
+      });
+    }
+    return null;
+  }
+
+  private async findSupervisorCandidate(params: {
+    repoRoot?: string;
+  }): Promise<
+    | { action: "start"; task: CodeTask; worker: CodeWorkerSession }
+    | { action: "resume"; task: CodeTask; worker: CodeWorkerSession }
+    | { action: "create"; task: CodeTask }
+    | null
+  > {
+    const pickTask = (store: Awaited<ReturnType<typeof loadCodeCockpitStore>>) =>
+      [...store.tasks]
+        .filter((task) => taskMatchesRepo(task, params.repoRoot))
+        .filter((task) => !["done", "cancelled", "review"].includes(task.status))
+        .toSorted((left, right) => {
+          const priorityDelta =
+            (TASK_PRIORITY_ORDER[left.priority] ?? TASK_PRIORITY_ORDER.normal) -
+            (TASK_PRIORITY_ORDER[right.priority] ?? TASK_PRIORITY_ORDER.normal);
+          if (priorityDelta !== 0) {
+            return priorityDelta;
+          }
+          return left.updatedAt.localeCompare(right.updatedAt);
+        });
+
+    const pickFromStore = (store: Awaited<ReturnType<typeof loadCodeCockpitStore>>) => {
+      const queuedWorker = [...store.workers]
+        .filter((worker) => worker.status === "queued")
+        .find((worker) => {
+          const task = store.tasks.find((entry) => entry.id === worker.taskId);
+          return Boolean(task && taskMatchesRepo(task, params.repoRoot));
+        });
+      if (queuedWorker) {
+        const task = store.tasks.find((entry) => entry.id === queuedWorker.taskId);
+        if (task) {
+          return { action: "start" as const, task, worker: queuedWorker };
+        }
+      }
+
+      const pausedWorker = [...store.workers]
+        .filter((worker) => worker.status === "paused")
+        .find((worker) => {
+          const task = store.tasks.find((entry) => entry.id === worker.taskId);
+          return Boolean(task && taskMatchesRepo(task, params.repoRoot));
+        });
+      if (pausedWorker) {
+        const task = store.tasks.find((entry) => entry.id === pausedWorker.taskId);
+        if (task) {
+          return { action: "resume" as const, task, worker: pausedWorker };
+        }
+      }
+
+      const task = pickTask(store).find((entry) => {
+        const workers = store.workers.filter((worker) => worker.taskId === entry.id);
+        return !workers.some(workerBlocksTask);
+      });
+      if (task) {
+        return { action: "create" as const, task };
+      }
+      return null;
+    };
+
+    const initialStore = await loadCodeCockpitStore();
+    const initialCandidate = pickFromStore(initialStore);
+    if (initialCandidate) {
+      return initialCandidate;
+    }
+    if (!params.repoRoot) {
+      return null;
+    }
+    const bootstrappedTask = await this.bootstrapFastTodoTask(params.repoRoot);
+    if (!bootstrappedTask) {
+      return null;
+    }
+    const refreshedStore = await loadCodeCockpitStore();
+    return pickFromStore(refreshedStore);
+  }
+
+  private async markTaskInProgress(taskId: string) {
+    await updateCodeTaskStatus(taskId, "in_progress").catch(() => undefined);
+  }
+
   private async finalizeWorkerRun(params: {
     workerId: string;
     taskId: string;
     workerName: string;
     localRunId: string;
+    engine: WorkerEngineAdapter;
+    modelId: string;
     preparedBackend: PreparedBackend;
     existingThreadId?: string;
     useResume: boolean;
@@ -379,6 +607,11 @@ class CodeCockpitRuntime {
     const stderrTail =
       active?.stderrTail ?? trimLogTail(params.exit.stderr, MAX_LOG_TAIL_CHARS) ?? undefined;
     const threadId = output.threadId ?? params.existingThreadId;
+    const finishedAuthHealth = inferAuthHealth({
+      stdout: params.exit.stdout,
+      stderr: params.exit.stderr,
+      success: params.exit.reason === "exit" && params.exit.exitCode === 0,
+    });
 
     if (stopIntent === "paused" || stopIntent === "cancelled") {
       await updateCodeRun(params.localRunId, {
@@ -394,6 +627,11 @@ class CodeCockpitRuntime {
       await updateCodeWorkerSession(params.workerId, {
         status: stopIntent,
         activeRunId: null,
+        engineId: params.engine.engineId,
+        engineModel: params.modelId,
+        commandPath: params.preparedBackend.backend.command,
+        authHealth: finishedAuthHealth,
+        lastAuthCheckedAt: finishedAt,
         threadId: threadId ?? null,
         lastExitedAt: finishedAt,
         lastExitReason: stopIntent,
@@ -416,6 +654,11 @@ class CodeCockpitRuntime {
       await updateCodeWorkerSession(params.workerId, {
         status: "awaiting_review",
         activeRunId: null,
+        engineId: params.engine.engineId,
+        engineModel: params.modelId,
+        commandPath: params.preparedBackend.backend.command,
+        authHealth: finishedAuthHealth,
+        lastAuthCheckedAt: finishedAt,
         threadId: threadId ?? null,
         lastExitedAt: finishedAt,
         lastExitReason: "succeeded",
@@ -445,6 +688,11 @@ class CodeCockpitRuntime {
     await updateCodeWorkerSession(params.workerId, {
       status: "failed",
       activeRunId: null,
+      engineId: params.engine.engineId,
+      engineModel: params.modelId,
+      commandPath: params.preparedBackend.backend.command,
+      authHealth: finishedAuthHealth,
+      lastAuthCheckedAt: finishedAt,
       threadId: threadId ?? null,
       lastExitedAt: finishedAt,
       lastExitReason: failureReason,
@@ -462,12 +710,10 @@ class CodeCockpitRuntime {
     if (!repoRoot) {
       throw new Error(`Worker "${worker.id}" must define a repo root before it can run`);
     }
-    const backendResolved = this.resolveCliBackendConfig(
-      DEFAULT_WORKER_BACKEND_ID,
-      this.loadConfig(),
-    );
+    const engine = resolveWorkerEngineAdapter(worker);
+    const backendResolved = this.resolveCliBackendConfig(engine.backendId, this.loadConfig());
     if (!backendResolved) {
-      throw new Error(`CLI backend "${DEFAULT_WORKER_BACKEND_ID}" is not configured`);
+      throw new Error(`CLI backend "${engine.backendId}" is not configured`);
     }
     const preparedBackend = await this.prepareCliBundleMcpConfig({
       backendId: backendResolved.id,
@@ -491,6 +737,7 @@ class CodeCockpitRuntime {
     if (!prompt) {
       throw new Error(`Worker "${worker.id}" has no objective or task goal to execute`);
     }
+    const modelId = normalizeString(worker.engineModel) ?? engine.defaultModel;
     const useResume = Boolean(worker.threadId && preparedBackend.backend.resumeArgs?.length);
     const baseArgs = useResume
       ? (preparedBackend.backend.resumeArgs ?? []).map((entry) =>
@@ -504,7 +751,7 @@ class CodeCockpitRuntime {
     const args = buildCliArgs({
       backend: preparedBackend.backend,
       baseArgs,
-      modelId: DEFAULT_CODEX_WORKER_MODEL,
+      modelId,
       sessionId: worker.threadId,
       systemPrompt: null,
       promptArg: argsPrompt,
@@ -529,7 +776,10 @@ class CodeCockpitRuntime {
       repoRoot,
       worktreePath: ensured.worktreePath,
       branch: ensured.branch,
+      engineId: engine.engineId,
+      engineModel: modelId,
       backendId: backendResolved.id,
+      commandPath: preparedBackend.backend.command,
       scopeKey,
       activeRunId: queuedRun.id,
       lastStartedAt: nowIso(this.now),
@@ -593,6 +843,8 @@ class CodeCockpitRuntime {
             taskId: task.id,
             workerName: worker.name,
             localRunId: queuedRun.id,
+            engine,
+            modelId,
             preparedBackend,
             existingThreadId: worker.threadId,
             useResume,
@@ -605,6 +857,8 @@ class CodeCockpitRuntime {
             taskId: task.id,
             workerName: worker.name,
             localRunId: queuedRun.id,
+            engine,
+            modelId,
             preparedBackend,
             existingThreadId: worker.threadId,
             useResume,
@@ -630,6 +884,14 @@ class CodeCockpitRuntime {
       });
       await updateCodeWorkerSession(worker.id, {
         status: "failed",
+        engineId: engine.engineId,
+        engineModel: modelId,
+        commandPath: preparedBackend.backend.command,
+        authHealth: inferAuthHealth({
+          stderr: error instanceof Error ? error.message : String(error),
+          success: false,
+        }),
+        lastAuthCheckedAt: nowIso(this.now),
         activeRunId: null,
         lastExitedAt: nowIso(this.now),
         lastExitReason: "spawn-error",
@@ -737,6 +999,42 @@ class CodeCockpitRuntime {
       stdoutTail: await readTail(latestRun?.stdoutLogPath, active?.stdoutTail),
       stderrTail: await readTail(latestRun?.stderrLogPath, active?.stderrTail),
     };
+  }
+
+  async supervisorTick(params: CodeSupervisorTickInput = {}): Promise<CodeSupervisorTickResult> {
+    await this.ensureInitialized();
+    const repoRoot = normalizeString(params.repoRoot);
+    const candidate = await this.findSupervisorCandidate({ repoRoot });
+    if (!candidate) {
+      return { action: "noop", reason: "no-eligible-work" };
+    }
+
+    await this.markTaskInProgress(candidate.task.id);
+
+    if (candidate.action === "start") {
+      const started = await this.startWorker({ workerId: candidate.worker.id });
+      return { action: "started", task: candidate.task, worker: started.worker, run: started.run };
+    }
+
+    if (candidate.action === "resume") {
+      const resumed = await this.resumeWorker({ workerId: candidate.worker.id });
+      return { action: "resumed", task: candidate.task, worker: resumed.worker, run: resumed.run };
+    }
+
+    const store = await loadCodeCockpitStore();
+    const worker = await createCodeWorkerSession({
+      taskId: candidate.task.id,
+      name: buildSelfDriveWorkerName(candidate.task, store.workers),
+      repoRoot: candidate.task.repoRoot,
+      objective: buildSelfDriveObjective(candidate.task),
+      engineId: "codex",
+      engineModel: DEFAULT_CODEX_WORKER_MODEL,
+    });
+    const started = await this.startWorker({ workerId: worker.id });
+    const refreshedStore = await loadCodeCockpitStore();
+    const refreshedTask =
+      refreshedStore.tasks.find((entry) => entry.id === candidate.task.id) ?? candidate.task;
+    return { action: "started", task: refreshedTask, worker: started.worker, run: started.run };
   }
 
   async getWorkspaceSummary(): Promise<CodeCockpitWorkspaceSummary> {

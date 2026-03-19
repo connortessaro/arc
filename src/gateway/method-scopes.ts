@@ -113,6 +113,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "code.worker.pause",
     "code.worker.resume",
     "code.worker.cancel",
+    "code.supervisor.tick",
   ],
   [ADMIN_SCOPE]: [
     "channels.logout",

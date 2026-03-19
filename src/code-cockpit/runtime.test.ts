@@ -45,6 +45,26 @@ const backend: CliBackendConfig = {
   sessionMode: "existing",
 };
 
+const claudeBackend: CliBackendConfig = {
+  command: "claude",
+  args: ["-p", "--output-format", "json", "--permission-mode", "bypassPermissions"],
+  resumeArgs: [
+    "-p",
+    "--output-format",
+    "json",
+    "--permission-mode",
+    "bypassPermissions",
+    "--resume",
+    "{sessionId}",
+  ],
+  output: "json",
+  input: "arg",
+  modelArg: "--model",
+  sessionArg: "--session-id",
+  sessionMode: "always",
+  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+};
+
 let tempStateDir: string;
 let tempRepoRoot: string;
 
@@ -332,6 +352,98 @@ describe("code cockpit runtime", () => {
     });
   });
 
+  it("routes Claude workers through the claude-cli backend with engine-specific model metadata", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    const task = await store.createCodeTask({
+      title: "Review a change with Claude",
+      repoRoot: tempRepoRoot,
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "Claude Reviewer",
+      repoRoot: tempRepoRoot,
+      objective: "Review the current implementation and propose fixes",
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const started = await runtime.startWorker({ workerId: worker.id });
+
+    expect(started.worker.engineId).toBe("claude");
+    expect(started.worker.engineModel).toBe("claude-sonnet-4-6");
+    expect(started.worker.backendId).toBe("claude-cli");
+    expect(started.worker.commandPath).toBe("claude");
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(
+      expect.arrayContaining([
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "bypassPermissions",
+      ]),
+    );
+    expect(pendingRuns[0]?.input.argv).toEqual(
+      expect.arrayContaining(["--model", "claude-sonnet-4-6"]),
+    );
+    expect(pendingRuns[0]?.input.argv.at(-1)).toContain("Review the current implementation");
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 25,
+      stdout: JSON.stringify({
+        session_id: "claude-session-123",
+        result: "Review complete",
+      }),
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) =>
+            entry.id === worker.id &&
+            entry.status === "awaiting_review" &&
+            entry.threadId === "claude-session-123" &&
+            entry.authHealth === "healthy",
+        ),
+    );
+    expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+      backendId: "claude-cli",
+      commandPath: "claude",
+      threadId: "claude-session-123",
+      authHealth: "healthy",
+    });
+  });
+
   it("pauses a running worker through the supervisor and requires explicit resume after reconciliation", async () => {
     const { supervisor, pendingRuns, cancel } = createSupervisorStub();
 
@@ -440,5 +552,97 @@ describe("code cockpit runtime", () => {
       status: "failed",
       terminationReason: "interrupted",
     });
+  });
+
+  it("bootstraps the next task from FAST-TODO and starts a self-drive worker", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] Ship blocked queue\n- [ ] Add workspace persistence\n",
+      "utf8",
+    );
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) =>
+        provider === "codex-cli" ? { id: "codex-cli", config: backend } : null,
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.task).toMatchObject({
+      title: "Ship blocked queue",
+      repoRoot: tempRepoRoot,
+      status: "in_progress",
+    });
+    expect(result.worker).toMatchObject({
+      taskId: result.task?.id,
+      status: "running",
+      engineId: "codex",
+      engineModel: "gpt-5.4",
+    });
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["--model", "gpt-5.4"]));
+    expect(pendingRuns[0]?.input.argv.at(-1)).toContain(
+      "Do not push, merge, or touch the main checkout",
+    );
+  });
+
+  it("resumes a paused worker before creating new self-drive work", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    const task = await store.createCodeTask({
+      title: "Resume a paused change",
+      repoRoot: tempRepoRoot,
+      status: "in_progress",
+    });
+    const worktreePath = path.join(tempRepoRoot, ".worktrees", "code", "resume-worker");
+    await fs.mkdir(worktreePath, { recursive: true });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "resume-worker",
+      repoRoot: tempRepoRoot,
+      worktreePath,
+      branch: `code/${task.id}/resume-worker`,
+      objective: "Finish the paused task",
+      status: "paused",
+      engineId: "codex",
+      engineModel: "gpt-5.4",
+    });
+    await store.updateCodeWorkerSession(worker.id, {
+      threadId: "thread-existing",
+      backendId: "codex-cli",
+      scopeKey: `code-worker:${worker.id}`,
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) =>
+        provider === "codex-cli" ? { id: "codex-cli", config: backend } : null,
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("resumed");
+    expect(result.worker?.id).toBe(worker.id);
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(
+      expect.arrayContaining(["codex", "exec", "resume", "thread-existing"]),
+    );
   });
 });
