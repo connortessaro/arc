@@ -41,10 +41,12 @@ Not implemented yet:
 Useful VPS commands:
 
 ```bash
-cd /srv/arc/repo
-bash scripts/arc-self-drive/status.sh
-bash scripts/arc-self-drive/deploy.sh
-bash scripts/arc-self-drive/run-supervisor-tick.sh --repo /srv/arc/repo
+arc
+arc status
+arc do "Ship the next Arc feature"
+arc tasks --json
+arc reviews --json
+cd /srv/arc/repo && bash scripts/arc-self-drive/deploy.sh
 ```
 
 Useful Mac-side queue commands when `gateway.mode=remote` targets the VPS:

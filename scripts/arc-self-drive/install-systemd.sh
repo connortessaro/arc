@@ -12,6 +12,7 @@ mkdir -p "$SYSTEMD_DIR"
 mkdir -p "$ENV_DIR"
 
 python3 "${ROOT_DIR}/scripts/arc-self-drive/configure-cli-backends.py" >/dev/null
+bash "${ROOT_DIR}/scripts/arc-self-drive/install-shell-commands.sh" >/dev/null
 
 cat >"${SYSTEMD_DIR}/openclaw-gateway.service" <<EOF
 [Unit]

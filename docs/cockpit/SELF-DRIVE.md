@@ -9,8 +9,21 @@ Arc can now run a constrained self-drive loop on the VPS:
 - it allows local branch commits
 - it does not push or merge
 - it treats `/srv/arc/repo` as the canonical Arc checkout
+- it can expose `arc` and `openclaw` as real VPS commands so you do not have to remember repo-local script paths
 
 ## Commands
+
+Use the VPS operator shell commands after installing the runtime:
+
+```bash
+arc
+arc status
+arc do "Build the next Arc feature"
+arc tasks --json
+arc reviews --json
+arc approve review_123
+arc daemon status
+```
 
 Run one supervisor cycle through the gateway:
 
@@ -56,6 +69,9 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/install-systemd.sh
 ```
 
+That installer now also installs user-level `arc` and `openclaw` shims into `~/.local/bin`
+and adds `~/.local/bin` plus `~/.npm-global/bin` to the shell `PATH`.
+
 Persist Claude's unattended token from the current VPS shell into the service/timer environment:
 
 ```bash
@@ -100,6 +116,7 @@ Install notes:
 - task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`
 - `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can be managed from the Mac CLI
 - `scripts/arc-self-drive/mac-remote-code.sh` opens a temporary SSH tunnel, reads the active VPS gateway token, and runs the source CLI in remote mode without changing your global config
+- `scripts/arc-self-drive/run-code-via-gateway.sh` forces `openclaw code` traffic through the live gateway on the VPS instead of mutating the cockpit store directly from a second process
 - completed work lands in review; self-drive pauses new work when there are 3 pending reviews
 - `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled

@@ -106,4 +106,4 @@ until curl -fsS "$HEALTHCHECK_URL" >/dev/null 2>&1; do
 done
 
 OPENCLAW_STATE_DIR="$TEMP_STATE_DIR" \
-  node --import tsx "${ROOT_DIR}/scripts/arc-self-drive/mac-remote-code-entry.ts" "$@"
+  node --import tsx "${ROOT_DIR}/scripts/arc-self-drive/code-cli-entry.ts" "$@"
