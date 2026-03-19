@@ -33,6 +33,7 @@ import {
 } from "./store.js";
 
 const DEFAULT_WORKER_BACKEND_ID = "codex-cli";
+const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
 
@@ -503,7 +504,7 @@ class CodeCockpitRuntime {
     const args = buildCliArgs({
       backend: preparedBackend.backend,
       baseArgs,
-      modelId: "default",
+      modelId: DEFAULT_CODEX_WORKER_MODEL,
       sessionId: worker.threadId,
       systemPrompt: null,
       promptArg: argsPrompt,
