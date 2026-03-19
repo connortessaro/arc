@@ -42,6 +42,7 @@ const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
 const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
+const PENDING_REVIEW_CAP = 3;
 const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
 const SELF_DRIVE_POLICY =
   "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
@@ -426,6 +427,11 @@ class CodeCockpitRuntime {
         });
       }
     }
+    for (const task of store.tasks) {
+      if (this.taskShouldBeInReview(store, task.id) && task.status === "in_progress") {
+        await updateCodeTaskStatus(task.id, "review").catch(() => undefined);
+      }
+    }
   }
 
   private async resolveWorker(
@@ -607,6 +613,26 @@ class CodeCockpitRuntime {
     }
     const refreshedStore = await loadCodeCockpitStore();
     return pickFromStore(refreshedStore);
+  }
+
+  private countPendingReviews(
+    store: Awaited<ReturnType<typeof loadCodeCockpitStore>>,
+    repoRoot?: string,
+  ) {
+    return store.reviews.filter((review) => {
+      if (review.status !== "pending") {
+        return false;
+      }
+      const task = store.tasks.find((entry) => entry.id === review.taskId);
+      return Boolean(task && taskMatchesRepo(task, repoRoot));
+    }).length;
+  }
+
+  private taskShouldBeInReview(
+    store: Awaited<ReturnType<typeof loadCodeCockpitStore>>,
+    taskId: string,
+  ): boolean {
+    return store.reviews.some((review) => review.taskId === taskId && review.status === "pending");
   }
 
   private async markTaskInProgress(taskId: string) {
@@ -847,6 +873,7 @@ class CodeCockpitRuntime {
         lastExitedAt: finishedAt,
         lastExitReason: "succeeded",
       });
+      await updateCodeTaskStatus(params.taskId, "review").catch(() => undefined);
       await this.ensurePendingReview(params.taskId, params.workerId, params.workerName);
       return;
     }
@@ -890,6 +917,7 @@ class CodeCockpitRuntime {
     }
 
     const { task, worker } = await this.resolveWorker(params.workerId);
+    await this.markTaskInProgress(task.id);
     const repoRoot = worker.repoRoot ?? task.repoRoot;
     if (!repoRoot) {
       throw new Error(`Worker "${worker.id}" must define a repo root before it can run`);
@@ -1185,6 +1213,10 @@ class CodeCockpitRuntime {
   async supervisorTick(params: CodeSupervisorTickInput = {}): Promise<CodeSupervisorTickResult> {
     await this.ensureInitialized();
     const repoRoot = normalizeString(params.repoRoot);
+    const store = await loadCodeCockpitStore();
+    if (this.countPendingReviews(store, repoRoot) >= PENDING_REVIEW_CAP) {
+      return { action: "noop", reason: "pending-review-cap" };
+    }
     const candidate = await this.findSupervisorCandidate({ repoRoot });
     if (!candidate) {
       return { action: "noop", reason: "no-eligible-work" };
@@ -1221,11 +1253,11 @@ class CodeCockpitRuntime {
       };
     }
 
-    const store = await loadCodeCockpitStore();
+    const refreshedStoreForWorker = await loadCodeCockpitStore();
     await this.markTaskInProgress(candidate.task.id);
     const worker = await createCodeWorkerSession({
       taskId: candidate.task.id,
-      name: buildSelfDriveWorkerName(candidate.task, store.workers),
+      name: buildSelfDriveWorkerName(candidate.task, refreshedStoreForWorker.workers),
       repoRoot: candidate.task.repoRoot,
       objective: buildSelfDriveObjective(candidate.task),
       engineId: engineSelection.selected.engine.engineId,

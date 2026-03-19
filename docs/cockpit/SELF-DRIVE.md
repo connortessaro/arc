@@ -79,6 +79,7 @@ Install notes:
 - one worker per supervisor tick
 - default engine order is Claude first, then Codex as fallback when Claude is unavailable or cooling down after a usage-limit failure
 - Claude becomes fully unattended only after its token is persisted into the service env file
-- self-drive tasks are imported from unchecked items in `docs/cockpit/FAST-TODO.md`
-- completed work lands in review; self-drive does not push or merge
+- task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`
+- completed work lands in review; self-drive pauses new work when there are 3 pending reviews
+- `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled

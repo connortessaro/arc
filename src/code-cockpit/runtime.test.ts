@@ -327,10 +327,14 @@ describe("code cockpit runtime", () => {
         ),
     );
     const nextWorker = refreshed.workers.find((entry) => entry.id === worker.id);
+    const nextTask = refreshed.tasks.find((entry) => entry.id === task.id);
     expect(nextWorker).toMatchObject({
       status: "awaiting_review",
       threadId: "thread-123",
       lastExitReason: "succeeded",
+    });
+    expect(nextTask).toMatchObject({
+      status: "review",
     });
     expect(nextWorker?.activeRunId).toBeUndefined();
     expect(
@@ -862,6 +866,148 @@ describe("code cockpit runtime", () => {
     expect(result.worker?.engineId).toBe("codex");
     expect(pendingRuns).toHaveLength(1);
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
+  });
+
+  it("pauses self-drive when the pending review cap is reached", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    for (const title of ["Review item one", "Review item two", "Review item three"]) {
+      const task = await store.createCodeTask({
+        title,
+        repoRoot: tempRepoRoot,
+        status: "review",
+      });
+      const worker = await store.createCodeWorkerSession({
+        taskId: task.id,
+        name: `${title}-worker`,
+        repoRoot: tempRepoRoot,
+        status: "awaiting_review",
+      });
+      await store.createCodeReviewRequest({
+        taskId: task.id,
+        workerId: worker.id,
+        title: `Review ${title}`,
+      });
+    }
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result).toMatchObject({
+      action: "noop",
+      reason: "pending-review-cap",
+    });
+    expect(pendingRuns).toHaveLength(0);
+  });
+
+  it("prefers explicitly queued tasks before bootstrapping FAST-TODO work", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] FAST TODO item\n",
+      "utf8",
+    );
+    const queuedTask = await store.createCodeTask({
+      title: "Explicit queued task",
+      repoRoot: tempRepoRoot,
+      priority: "urgent",
+      goal: "Prefer queued tasks",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.task).toMatchObject({
+      id: queuedTask.id,
+      title: "Explicit queued task",
+    });
+    expect(pendingRuns).toHaveLength(1);
+  });
+
+  it("reconciles stale in-progress tasks with pending reviews into review state on startup", async () => {
+    const { supervisor } = createSupervisorStub();
+
+    const task = await store.createCodeTask({
+      title: "Normalize review task",
+      repoRoot: tempRepoRoot,
+      status: "in_progress",
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "normalize-worker",
+      repoRoot: tempRepoRoot,
+      status: "awaiting_review",
+    });
+    await store.createCodeReviewRequest({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Normalize review",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const shown = await runtime.showWorker({ workerId: worker.id });
+
+    expect(shown.task).toMatchObject({
+      status: "review",
+    });
+    expect(shown.worker).toMatchObject({
+      status: "awaiting_review",
+    });
   });
 
   it("blocks a preferred-engine task when its requested engine is unavailable", async () => {
