@@ -44,6 +44,9 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/deploy.sh
 ```
 
+`deploy.sh` waits for the source gateway to answer `127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}/health`
+before it exits. On a cold source restart, that can take around 1–2 minutes.
+
 Inspect the current self-drive queue, running workers, and latest runs:
 
 ```bash
