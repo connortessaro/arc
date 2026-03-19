@@ -40,6 +40,7 @@ const backend: CliBackendConfig = {
   output: "jsonl",
   resumeOutput: "text",
   input: "arg",
+  modelArg: "--model",
   sessionIdFields: ["thread_id"],
   sessionMode: "existing",
 };
@@ -212,6 +213,7 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns[0]?.input.argv).toEqual(
       expect.arrayContaining(["codex", "exec", "--json", "--color", "never"]),
     );
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["--model", "gpt-5.4"]));
     expect(pendingRuns[0]?.input.argv.at(-1)).toContain("Plan and implement the runtime");
     await expect(fs.stat(worktreePath)).resolves.toBeTruthy();
     await expect(runGit(["branch", "--show-current"], worktreePath)).resolves.toBe(
