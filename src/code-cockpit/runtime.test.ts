@@ -703,6 +703,67 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns).toHaveLength(1);
   });
 
+  it("does not resume a paused worker whose task was cancelled", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] inspect logs and latest run state in-app\n- [ ] route completed and blocked work into clear queues\n",
+      "utf8",
+    );
+
+    const cancelledTask = await store.createCodeTask({
+      title: "inspect logs and latest run state in-app",
+      repoRoot: tempRepoRoot,
+      status: "cancelled",
+    });
+    await store.createCodeWorkerSession({
+      taskId: cancelledTask.id,
+      name: "stale-paused-worker",
+      repoRoot: tempRepoRoot,
+      status: "paused",
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.task).toMatchObject({
+      title: "route completed and blocked work into clear queues",
+      status: "in_progress",
+    });
+    expect(result.worker).toMatchObject({
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+    });
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["claude", "-p"]));
+  });
+
   it("resumes a paused worker before creating new self-drive work", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
