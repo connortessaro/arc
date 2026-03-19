@@ -7,6 +7,8 @@ GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 
 mkdir -p "$SYSTEMD_DIR"
 
+python3 "${ROOT_DIR}/scripts/arc-self-drive/configure-cli-backends.py" >/dev/null
+
 cat >"${SYSTEMD_DIR}/openclaw-gateway.service" <<EOF
 [Unit]
 Description=OpenClaw Gateway (Arc source runtime)

@@ -37,6 +37,13 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/install-systemd.sh
 ```
 
+Install notes:
+
+- the installer also rewrites `~/.openclaw/openclaw.json` so:
+  - `codex-cli` uses the user-local CLI binary under `~/.npm-global/bin/codex`
+  - Codex workers run with `--dangerously-bypass-approvals-and-sandbox` on the VPS
+  - `claude-cli` points at `~/.npm-global/bin/claude`
+
 ## Current Policy
 
 - one worker per supervisor tick
