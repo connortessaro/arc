@@ -8,6 +8,7 @@ import type {
   CodeTask,
   CodeTaskPriority,
   CodeTaskStatus,
+  CodeWorkerEngineId,
   CodeWorkerLane,
   CodeWorkerSession,
   CodeWorkerStatus,
@@ -20,6 +21,7 @@ import {
   CODE_REVIEW_STATUSES,
   CODE_TASK_PRIORITIES,
   CODE_TASK_STATUSES,
+  CODE_WORKER_ENGINE_IDS,
   CODE_WORKER_LANES,
   CODE_WORKER_STATUSES,
   createCodeReviewRequest,
@@ -72,6 +74,8 @@ export type CodeWorkerAddOptions = {
   worktree?: string;
   branch?: string;
   objective?: string;
+  engine?: string;
+  model?: string;
   lane?: string;
   status?: string;
   json?: boolean;
@@ -102,6 +106,11 @@ export type CodeWorkerResumeOptions = {
 };
 
 export type CodeWorkerControlOptions = {
+  json?: boolean;
+};
+
+export type CodeSupervisorTickOptions = {
+  repo?: string;
   json?: boolean;
 };
 
@@ -189,10 +198,14 @@ function describeTask(task: CodeTask): string {
 function describeWorker(worker: CodeWorkerSession): string {
   const branch = worker.branch ? ` branch=${worker.branch}` : "";
   const lane = worker.lane === "worker" ? "" : ` lane=${worker.lane}`;
+  const engine =
+    worker.engineId || worker.engineModel
+      ? ` engine=${[worker.engineId, worker.engineModel].filter(Boolean).join("/")}`
+      : "";
   const worktreePath = worker.worktreePath
     ? ` worktree=${shortenHomePath(worker.worktreePath)}`
     : "";
-  return `${worker.id} [${worker.status}] ${worker.name} task=${worker.taskId}${lane}${branch}${worktreePath}`;
+  return `${worker.id} [${worker.status}] ${worker.name} task=${worker.taskId}${engine}${lane}${branch}${worktreePath}`;
 }
 
 function describeReview(review: CodeReviewRequest): string {
@@ -224,6 +237,19 @@ function formatCounts<T extends Record<string, number>>(counts: T): string {
     .filter(([, value]) => value > 0)
     .map(([key, value]) => `${key}=${value}`)
     .join(", ");
+}
+
+function ensureWorkerEngineId(value: string | undefined): CodeWorkerEngineId | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if ((CODE_WORKER_ENGINE_IDS as readonly string[]).includes(normalized)) {
+    return normalized as CodeWorkerEngineId;
+  }
+  throw new Error(
+    `Invalid worker engine "${value}". Expected one of: ${CODE_WORKER_ENGINE_IDS.join(", ")}`,
+  );
 }
 
 function printSection(runtime: RuntimeEnv, heading: string, items: string[]): void {
@@ -479,6 +505,8 @@ export async function codeWorkerAddCommand(
       worktreePath: resolveCodePath(opts.worktree),
       branch: opts.branch,
       objective: opts.objective,
+      engineId: ensureWorkerEngineId(opts.engine),
+      engineModel: opts.model?.trim() || undefined,
     },
     buildStoreOptions(),
   );
@@ -643,6 +671,37 @@ export async function codeWorkerLogsCommand(
   runtime.log(payload.stdoutTail || "  <empty>");
   runtime.log("stderr:");
   runtime.log(payload.stderrTail || "  <empty>");
+}
+
+export async function codeSupervisorTickCommand(
+  opts: CodeSupervisorTickOptions,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  const repoRoot = resolveCodePath(opts.repo);
+  const payload = await callCodeGateway<{
+    action: "noop" | "started" | "resumed";
+    reason?: string;
+    task?: CodeTask;
+    worker?: CodeWorkerSession;
+    run?: CodeRun;
+  }>("code.supervisor.tick", repoRoot ? { repoRoot } : {});
+  if (opts.json) {
+    emitJson(runtime, payload);
+    return;
+  }
+  runtime.log(`Supervisor action: ${payload.action}`);
+  if (payload.reason) {
+    runtime.log(`Reason: ${payload.reason}`);
+  }
+  if (payload.task) {
+    runtime.log(`Task: ${describeTask(payload.task)}`);
+  }
+  if (payload.worker) {
+    runtime.log(`Worker: ${describeWorker(payload.worker)}`);
+  }
+  if (payload.run) {
+    runtime.log(`Run: ${describeRun(payload.run)}`);
+  }
 }
 
 export async function codeReviewAddCommand(

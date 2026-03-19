@@ -18,6 +18,11 @@ function requireMessage(value: unknown): string {
   return message;
 }
 
+function optionalRepoRoot(value: unknown): string | undefined {
+  const repoRoot = typeof value === "string" ? value.trim() : "";
+  return repoRoot || undefined;
+}
+
 async function withRuntimeResult(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
   run: () => Promise<unknown>,
@@ -105,6 +110,15 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
       async () =>
         await getCodeCockpitRuntime().readWorkerLogs({
           workerId: requireWorkerId(params.workerId),
+        }),
+    );
+  },
+  "code.supervisor.tick": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().supervisorTick({
+          repoRoot: optionalRepoRoot(params.repoRoot),
         }),
     );
   },

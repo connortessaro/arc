@@ -94,4 +94,31 @@ describe("code worker gateway cli", () => {
       run: { id: "run_456", status: "running" },
     });
   });
+
+  it("routes supervisor tick through the gateway", async () => {
+    const { program, gateway, runtime } = await createProgram();
+    const log = vi.spyOn(runtime.defaultRuntime, "log").mockImplementation(() => {});
+    vi.mocked(gateway.callGateway).mockResolvedValue({
+      action: "started",
+      task: { id: "task_123", title: "Ship blocked queue" },
+      worker: { id: "worker_123", status: "running" },
+    });
+
+    await program.parseAsync(["code", "supervisor", "tick", "--repo", "/srv/arc/repo", "--json"], {
+      from: "user",
+    });
+
+    expect(gateway.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "code.supervisor.tick",
+        params: { repoRoot: "/srv/arc/repo" },
+      }),
+    );
+    const payload = log.mock.calls[0]?.[0];
+    expect(typeof payload).toBe("string");
+    expect(JSON.parse(payload as string)).toMatchObject({
+      action: "started",
+      task: { id: "task_123" },
+    });
+  });
 });

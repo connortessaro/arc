@@ -31,6 +31,11 @@ const runtimeMethods = vi.hoisted(() => ({
       stdoutTail: "",
       stderrTail: "",
     })),
+    supervisorTick: vi.fn(async ({ repoRoot }: { repoRoot?: string }) => ({
+      action: "started",
+      task: { id: "task_123", title: "Ship blocked queue", repoRoot },
+      worker: { id: "worker_123", status: "running" },
+    })),
     getWorkspaceSummary: vi.fn(async () => ({
       storePath: "/tmp/openclaw/code-cockpit.json",
       generatedAt: "2026-03-19T12:00:00.000Z",
@@ -85,6 +90,7 @@ beforeEach(() => {
   runtimeMethods.runtime.cancelWorker.mockClear();
   runtimeMethods.runtime.showWorker.mockClear();
   runtimeMethods.runtime.readWorkerLogs.mockClear();
+  runtimeMethods.runtime.supervisorTick.mockClear();
   runtimeMethods.runtime.getWorkspaceSummary.mockClear();
 });
 
@@ -156,6 +162,33 @@ describe("code cockpit gateway handlers", () => {
       expect.objectContaining({
         storePath: "/tmp/openclaw/code-cockpit.json",
         totals: expect.objectContaining({ workers: 1 }),
+      }),
+      undefined,
+    );
+  });
+
+  it("delegates supervisor tick to the gateway-owned runtime", async () => {
+    const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
+    const respond = vi.fn();
+
+    await codeCockpitHandlers["code.supervisor.tick"]({
+      req: { method: "code.supervisor.tick", id: "1", params: { repoRoot: "/srv/arc/repo" } },
+      params: { repoRoot: "/srv/arc/repo" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(runtimeMethods.getCodeCockpitRuntime).toHaveBeenCalledTimes(1);
+    expect(runtimeMethods.runtime.supervisorTick).toHaveBeenCalledWith({
+      repoRoot: "/srv/arc/repo",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        action: "started",
+        task: expect.objectContaining({ id: "task_123" }),
       }),
       undefined,
     );

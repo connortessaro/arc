@@ -162,4 +162,41 @@ describe("code cli", () => {
       status: "in_progress",
     });
   });
+
+  it("accepts worker engine and model options through the CLI", async () => {
+    const { program, defaultRuntime } = await createProgram();
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    await program.parseAsync(["code", "task", "add", "Wire Claude worker", "--json"], {
+      from: "user",
+    });
+    const task = firstLoggedJson(log);
+    log.mockClear();
+
+    await program.parseAsync(
+      [
+        "code",
+        "worker",
+        "add",
+        "--task",
+        String(task.id),
+        "--name",
+        "reviewer",
+        "--engine",
+        "claude",
+        "--model",
+        "claude-sonnet-4-6",
+        "--json",
+      ],
+      { from: "user" },
+    );
+    const worker = firstLoggedJson(log);
+
+    expect(worker).toMatchObject({
+      taskId: task.id,
+      name: "reviewer",
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+    });
+  });
 });

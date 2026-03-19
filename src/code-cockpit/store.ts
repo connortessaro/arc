@@ -30,6 +30,8 @@ export const CODE_WORKER_STATUSES = [
 ] as const;
 
 export const CODE_WORKER_LANES = ["worker", "review"] as const;
+export const CODE_WORKER_ENGINE_IDS = ["codex", "claude"] as const;
+export const CODE_WORKER_AUTH_HEALTHS = ["unknown", "healthy", "expired", "missing"] as const;
 
 export const CODE_REVIEW_STATUSES = [
   "pending",
@@ -46,6 +48,8 @@ export type CodeTaskStatus = (typeof CODE_TASK_STATUSES)[number];
 export type CodeTaskPriority = (typeof CODE_TASK_PRIORITIES)[number];
 export type CodeWorkerStatus = (typeof CODE_WORKER_STATUSES)[number];
 export type CodeWorkerLane = (typeof CODE_WORKER_LANES)[number];
+export type CodeWorkerEngineId = (typeof CODE_WORKER_ENGINE_IDS)[number];
+export type CodeWorkerAuthHealth = (typeof CODE_WORKER_AUTH_HEALTHS)[number];
 export type CodeReviewStatus = (typeof CODE_REVIEW_STATUSES)[number];
 export type CodeContextSnapshotKind = (typeof CODE_CONTEXT_SNAPSHOT_KINDS)[number];
 export type CodeRunStatus = (typeof CODE_RUN_STATUSES)[number];
@@ -74,7 +78,13 @@ export type CodeWorkerSession = {
   worktreePath?: string;
   branch?: string;
   objective?: string;
+  engineId?: CodeWorkerEngineId;
+  engineModel?: string;
   backendId?: string;
+  commandPath?: string;
+  authHealth?: CodeWorkerAuthHealth;
+  lastAuthCheckedAt?: string;
+  lastCommitHash?: string;
   scopeKey?: string;
   activeRunId?: string;
   threadId?: string;
@@ -180,7 +190,11 @@ export type CodeCockpitLaneSummary = {
   worktreePath?: string;
   branch?: string;
   objective?: string;
+  engineId?: CodeWorkerEngineId;
+  engineModel?: string;
   backendId?: string;
+  commandPath?: string;
+  authHealth?: CodeWorkerAuthHealth;
   activeRunId?: string;
   updatedAt: string;
   latestRun: CodeRun | null;
@@ -217,6 +231,10 @@ export type CreateCodeWorkerSessionInput = {
   worktreePath?: string;
   branch?: string;
   objective?: string;
+  engineId?: CodeWorkerEngineId;
+  engineModel?: string;
+  commandPath?: string;
+  authHealth?: CodeWorkerAuthHealth;
 };
 
 export type CreateCodeReviewRequestInput = {
@@ -271,7 +289,13 @@ export type UpdateCodeWorkerSessionInput = {
   worktreePath?: string | null;
   branch?: string | null;
   objective?: string | null;
+  engineId?: CodeWorkerEngineId | null;
+  engineModel?: string | null;
   backendId?: string | null;
+  commandPath?: string | null;
+  authHealth?: CodeWorkerAuthHealth | null;
+  lastAuthCheckedAt?: string | null;
+  lastCommitHash?: string | null;
   scopeKey?: string | null;
   activeRunId?: string | null;
   threadId?: string | null;
@@ -463,6 +487,24 @@ function assertWorkerLane(value: string): CodeWorkerLane {
   );
 }
 
+function assertWorkerEngineId(value: string): CodeWorkerEngineId {
+  if ((CODE_WORKER_ENGINE_IDS as readonly string[]).includes(value)) {
+    return value as CodeWorkerEngineId;
+  }
+  throw new Error(
+    `Invalid worker engine "${value}". Expected one of: ${CODE_WORKER_ENGINE_IDS.join(", ")}`,
+  );
+}
+
+function assertWorkerAuthHealth(value: string): CodeWorkerAuthHealth {
+  if ((CODE_WORKER_AUTH_HEALTHS as readonly string[]).includes(value)) {
+    return value as CodeWorkerAuthHealth;
+  }
+  throw new Error(
+    `Invalid worker auth health "${value}". Expected one of: ${CODE_WORKER_AUTH_HEALTHS.join(", ")}`,
+  );
+}
+
 function assertReviewStatus(value: string): CodeReviewStatus {
   if ((CODE_REVIEW_STATUSES as readonly string[]).includes(value)) {
     return value as CodeReviewStatus;
@@ -616,6 +658,10 @@ export async function createCodeWorkerSession(
   }
   const status = assertWorkerStatus(input.status ?? "queued");
   const lane = assertWorkerLane(input.lane ?? "worker");
+  const engineId = input.engineId ? assertWorkerEngineId(input.engineId) : "codex";
+  const authHealth = input.authHealth
+    ? assertWorkerAuthHealth(input.authHealth)
+    : ("unknown" as const);
   return await mutateStore(options, (store, updatedAt) => {
     const task = findTask(store, input.taskId);
     const worker: CodeWorkerSession = {
@@ -628,6 +674,10 @@ export async function createCodeWorkerSession(
       worktreePath: normalizeString(input.worktreePath),
       branch: normalizeString(input.branch),
       objective: normalizeString(input.objective),
+      engineId,
+      engineModel: normalizeString(input.engineModel),
+      commandPath: normalizeString(input.commandPath),
+      authHealth,
       createdAt: updatedAt,
       updatedAt,
     };
@@ -687,9 +737,31 @@ export async function updateCodeWorkerSession(
     if (objective !== undefined) {
       worker.objective = objective ?? undefined;
     }
+    if (patch.engineId !== undefined) {
+      worker.engineId = patch.engineId ? assertWorkerEngineId(patch.engineId) : undefined;
+    }
+    const engineModel = normalizePatchString(patch.engineModel);
+    if (engineModel !== undefined) {
+      worker.engineModel = engineModel ?? undefined;
+    }
     const backendId = normalizePatchString(patch.backendId);
     if (backendId !== undefined) {
       worker.backendId = backendId ?? undefined;
+    }
+    const commandPath = normalizePatchString(patch.commandPath);
+    if (commandPath !== undefined) {
+      worker.commandPath = commandPath ?? undefined;
+    }
+    if (patch.authHealth !== undefined) {
+      worker.authHealth = patch.authHealth ? assertWorkerAuthHealth(patch.authHealth) : undefined;
+    }
+    const lastAuthCheckedAt = normalizePatchString(patch.lastAuthCheckedAt);
+    if (lastAuthCheckedAt !== undefined) {
+      worker.lastAuthCheckedAt = lastAuthCheckedAt ?? undefined;
+    }
+    const lastCommitHash = normalizePatchString(patch.lastCommitHash);
+    if (lastCommitHash !== undefined) {
+      worker.lastCommitHash = lastCommitHash ?? undefined;
     }
     const scopeKey = normalizePatchString(patch.scopeKey);
     if (scopeKey !== undefined) {

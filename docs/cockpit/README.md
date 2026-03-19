@@ -18,6 +18,8 @@ Implemented:
 - native worker controls and selected-worker log panel
 - remote gateway status banner with reconnect path
 - macOS Swift toolchain helper so cockpit smoke tests build under full Xcode
+- self-drive supervisor loop with Codex and Claude worker engines
+- source-based VPS gateway runner and self-drive systemd installer
 
 Not implemented yet:
 
@@ -30,8 +32,9 @@ Not implemented yet:
 1. `PRODUCT-SPLIT.md`
 2. `docs/cockpit/ARCHITECTURE.md`
 3. `docs/cockpit/FAST-TODO.md`
-4. `docs/cockpit/TODO.md`
-5. `docs/plans/2026-03-19-elite-developer-cockpit-v1.md`
+4. `docs/cockpit/SELF-DRIVE.md`
+5. `docs/cockpit/TODO.md`
+6. `docs/plans/2026-03-19-elite-developer-cockpit-v1.md`
 
 ## Current Code Map
 

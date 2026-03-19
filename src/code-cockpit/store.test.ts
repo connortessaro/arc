@@ -116,6 +116,46 @@ describe("code cockpit store", () => {
     );
   });
 
+  it("persists worker engine metadata and runtime health fields", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Run a Claude worker",
+      repoRoot: "/tmp/openclaw",
+    });
+
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "reviewer",
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+      commandPath: "/usr/local/bin/claude",
+      authHealth: "healthy",
+      repoRoot: "/tmp/openclaw",
+    });
+
+    await storeModule.updateCodeWorkerSession(worker.id, {
+      lastAuthCheckedAt: "2026-03-19T12:00:00.000Z",
+      lastCommitHash: "abc1234",
+    });
+
+    const store = await storeModule.loadCodeCockpitStore();
+
+    expect(store.workers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: worker.id,
+          taskId: task.id,
+          engineId: "claude",
+          engineModel: "claude-sonnet-4-6",
+          commandPath: "/usr/local/bin/claude",
+          authHealth: "healthy",
+          lastAuthCheckedAt: "2026-03-19T12:00:00.000Z",
+          lastCommitHash: "abc1234",
+        }),
+      ]),
+    );
+  });
+
   it("enforces worker lifecycle transitions", async () => {
     const storeModule = await importStoreModule();
     const task = await storeModule.createCodeTask({ title: "Run worker lifecycle checks" });

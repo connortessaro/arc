@@ -8,6 +8,7 @@ import {
   codeReviewListCommand,
   codeReviewStatusCommand,
   codeSummaryCommand,
+  codeSupervisorTickCommand,
   codeTaskAddCommand,
   codeTaskListCommand,
   codeTaskShowCommand,
@@ -135,6 +136,8 @@ export function registerCodeCli(program: Command) {
     .option("--worktree <path>", "Worktree path")
     .option("--branch <name>", "Branch name")
     .option("--objective <text>", "Worker objective")
+    .option("--engine <engine>", "Worker engine (codex|claude)")
+    .option("--model <id>", "Worker model override")
     .option("--lane <lane>", "Worker lane (worker|review)")
     .option("--status <status>", "Initial worker status")
     .option("--json", "Output JSON", false)
@@ -244,6 +247,18 @@ export function registerCodeCli(program: Command) {
     .action(async (workerId, opts) => {
       await runCodeCommand(async () => {
         await codeWorkerLogsCommand(workerId, opts, defaultRuntime);
+      });
+    });
+
+  const supervisor = code.command("supervisor").description("Run the Arc self-drive supervisor");
+  supervisor
+    .command("tick")
+    .description("Run one self-drive supervisor cycle")
+    .option("--repo <path>", "Repository root to supervise")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCodeCommand(async () => {
+        await codeSupervisorTickCommand(opts, defaultRuntime);
       });
     });
 
