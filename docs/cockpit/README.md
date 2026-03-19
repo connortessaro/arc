@@ -56,6 +56,14 @@ openclaw code review list --json
 openclaw code review status review_123 approved --json
 ```
 
+If you do not want to switch your global CLI config yet, use the repo-local wrapper instead:
+
+```bash
+cd /Users/tessaro/openclaw/.worktrees/coding-cockpit
+bash scripts/arc-self-drive/mac-remote-code.sh task list --json
+bash scripts/arc-self-drive/mac-remote-code.sh review list --json
+```
+
 Persist Claude for unattended service use:
 
 ```bash
@@ -136,6 +144,7 @@ The system is now split correctly:
 - the macOS app owns the future cockpit UX
 - the VPS checkout is the canonical async development runtime
 - the Mac CLI can queue and review remote work without SSHing into the VPS
+- the repo-local remote wrapper can drive the VPS queue without changing your global OpenClaw config
 - the Mac stays responsible for Swift/macOS verification
 
 The next work should make the native window useful, not broaden the backend
