@@ -585,11 +585,17 @@ class CodeCockpitRuntime {
         });
 
     const pickFromStore = (store: Awaited<ReturnType<typeof loadCodeCockpitStore>>) => {
+      const isRunnableTask = (task: CodeTask | undefined) =>
+        Boolean(
+          task &&
+          taskMatchesRepo(task, params.repoRoot) &&
+          !["done", "cancelled", "review"].includes(task.status),
+        );
       const queuedWorker = [...store.workers]
         .filter((worker) => worker.status === "queued")
         .find((worker) => {
           const task = store.tasks.find((entry) => entry.id === worker.taskId);
-          return Boolean(task && taskMatchesRepo(task, params.repoRoot));
+          return isRunnableTask(task);
         });
       if (queuedWorker) {
         const task = store.tasks.find((entry) => entry.id === queuedWorker.taskId);
@@ -602,7 +608,7 @@ class CodeCockpitRuntime {
         .filter((worker) => worker.status === "paused")
         .find((worker) => {
           const task = store.tasks.find((entry) => entry.id === worker.taskId);
-          return Boolean(task && taskMatchesRepo(task, params.repoRoot));
+          return isRunnableTask(task);
         });
       if (pausedWorker) {
         const task = store.tasks.find((entry) => entry.id === pausedWorker.taskId);
