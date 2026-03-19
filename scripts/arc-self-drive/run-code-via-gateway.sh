@@ -83,5 +83,6 @@ else
 EOF
 fi
 
+cd "$ROOT_DIR"
 OPENCLAW_STATE_DIR="$TEMP_STATE_DIR" \
   node --import tsx "${ROOT_DIR}/scripts/arc-self-drive/code-cli-entry.ts" "$@"
