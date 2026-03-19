@@ -4,11 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 
+# shellcheck source=./load-engine-env.sh
+source "$ROOT_DIR/scripts/arc-self-drive/load-engine-env.sh"
+load_arc_self_drive_env
+
 export PATH="${HOME}/.npm-global/bin:${HOME}/.local/bin:${ROOT_DIR}/node_modules/.bin:${PATH}"
 
 commit="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)"
 gateway_status="$(systemctl --user is-active openclaw-gateway.service 2>/dev/null || true)"
 gateway_health_raw="$(curl -fsS "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+auth_env_file="$(arc_self_drive_env_file)"
+auth_env_exists=false
+if [[ -f "$auth_env_file" ]]; then
+  auth_env_exists=true
+fi
 
 codex_path="$(command -v codex || true)"
 codex_health="missing"
@@ -24,8 +33,10 @@ claude_path="$(command -v claude || true)"
 claude_health="missing"
 if [[ -n "$claude_path" ]]; then
   claude_auth_status="$(claude auth status 2>/dev/null || true)"
-  if [[ "$claude_auth_status" == *'"loggedIn": true'* ]]; then
+  if [[ "$claude_auth_status" =~ \"loggedIn\"[[:space:]]*:[[:space:]]*true ]]; then
     claude_health="healthy"
+  elif [[ "$claude_auth_status" =~ \"loggedIn\"[[:space:]]*:[[:space:]]*false ]]; then
+    claude_health="missing"
   elif claude --version >/dev/null 2>&1; then
     claude_health="installed"
   else
@@ -43,6 +54,8 @@ jq -n \
   --arg commit "$commit" \
   --arg gatewayStatus "$gateway_status" \
   --arg gatewayPort "$PORT" \
+  --arg authEnvFile "$auth_env_file" \
+  --argjson authEnvExists "$auth_env_exists" \
   --arg codexPath "$codex_path" \
   --arg codexHealth "$codex_health" \
   --arg claudePath "$claude_path" \
@@ -54,6 +67,10 @@ jq -n \
       status: $gatewayStatus,
       port: $gatewayPort,
       health: $gatewayHealth
+    },
+    authEnvFile: {
+      path: $authEnvFile,
+      exists: $authEnvExists
     },
     engines: {
       codex: {
