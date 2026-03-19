@@ -26,6 +26,15 @@ openclaw code review list --json
 openclaw code review status review_123 approved --json
 ```
 
+Or use the repo-local remote wrapper from your Mac without touching global CLI config:
+
+```bash
+cd /Users/tessaro/openclaw/.worktrees/coding-cockpit
+bash scripts/arc-self-drive/mac-remote-code.sh task list --json
+bash scripts/arc-self-drive/mac-remote-code.sh review list --json
+bash scripts/arc-self-drive/mac-remote-code.sh review status review_123 approved --json
+```
+
 Run one supervisor cycle directly from source on the VPS:
 
 ```bash
@@ -90,6 +99,7 @@ Install notes:
 - Claude becomes fully unattended only after its token is persisted into the service env file
 - task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`
 - `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can be managed from the Mac CLI
+- `scripts/arc-self-drive/mac-remote-code.sh` opens a temporary SSH tunnel, reads the active VPS gateway token, and runs the source CLI in remote mode without changing your global config
 - completed work lands in review; self-drive pauses new work when there are 3 pending reviews
 - `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled
