@@ -41,6 +41,7 @@ const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
 const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
+const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
 const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
 const SELF_DRIVE_POLICY =
   "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
@@ -182,6 +183,13 @@ function inferAuthHealth(params: {
     return "expired";
   }
   if (
+    /rate limit|usage limit|too many requests|quota|credit balance.*low|try again later/.test(
+      haystack,
+    )
+  ) {
+    return "expired";
+  }
+  if (
     /missing.*api key|missing.*token|no api key|no token|credential|credentials|unauthorized/.test(
       haystack,
     )
@@ -223,6 +231,14 @@ function resolveTaskPreferredEngine(task: CodeTask): CodeWorkerEngineId | null {
     }
   }
   return null;
+}
+
+function parseTimestampMs(value?: string): number | null {
+  if (!value) {
+    return null;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function parseFastTodoItems(markdown: string): string[] {
@@ -676,6 +692,7 @@ class CodeCockpitRuntime {
   }
 
   private async resolveSupervisorEngine(task: CodeTask, repoRoot: string) {
+    const store = await loadCodeCockpitStore();
     const healthEntries = await Promise.all(
       Object.values(WORKER_ENGINE_ADAPTERS).map(
         async (engine) => await this.checkWorkerEngineHealth(engine, repoRoot),
@@ -684,24 +701,65 @@ class CodeCockpitRuntime {
     const healthByEngine = Object.fromEntries(
       healthEntries.map((entry) => [entry.engine.engineId, entry]),
     ) as Record<CodeWorkerEngineId, WorkerEngineHealth>;
+    const coolingDownEngines = new Set(
+      Object.values(WORKER_ENGINE_ADAPTERS)
+        .map((engine) => engine.engineId)
+        .filter((engineId) => this.isEngineCoolingDown(store, engineId)),
+    );
     const preferredEngine = resolveTaskPreferredEngine(task);
     if (preferredEngine) {
       const preferred = healthByEngine[preferredEngine];
-      if (preferred?.healthy) {
+      if (preferred?.healthy && !coolingDownEngines.has(preferredEngine)) {
         return { selected: preferred, reason: null as string | null };
+      }
+      if (coolingDownEngines.has(preferredEngine)) {
+        return {
+          selected: null,
+          reason: `preferred-engine-cooling-down:${preferredEngine}`,
+        };
       }
       return {
         selected: null,
         reason: `preferred-engine-unhealthy:${preferredEngine}`,
       };
     }
-    if (healthByEngine.codex?.healthy) {
-      return { selected: healthByEngine.codex, reason: null as string | null };
+    for (const engineId of ["claude", "codex"] as const) {
+      const health = healthByEngine[engineId];
+      if (health?.healthy && !coolingDownEngines.has(engineId)) {
+        return { selected: health, reason: null as string | null };
+      }
     }
-    if (healthByEngine.claude?.healthy) {
-      return { selected: healthByEngine.claude, reason: null as string | null };
+    if (healthByEngine.claude?.healthy && coolingDownEngines.has("claude")) {
+      return { selected: null, reason: "engine-cooling-down:claude" };
     }
     return { selected: null, reason: "no-healthy-engine" };
+  }
+
+  private isEngineCoolingDown(
+    store: Awaited<ReturnType<typeof loadCodeCockpitStore>>,
+    engineId: CodeWorkerEngineId,
+  ): boolean {
+    const latestExpiredWorker = [...store.workers]
+      .filter((worker) => resolveWorkerEngineId(worker) === engineId)
+      .filter((worker) => worker.authHealth === "expired")
+      .filter(
+        (worker) => worker.lastExitReason === "failed" || worker.lastExitReason === "spawn-error",
+      )
+      .toSorted((left, right) => {
+        const leftMs = parseTimestampMs(left.lastExitedAt ?? left.updatedAt) ?? 0;
+        const rightMs = parseTimestampMs(right.lastExitedAt ?? right.updatedAt) ?? 0;
+        return rightMs - leftMs;
+      })[0];
+    if (!latestExpiredWorker) {
+      return false;
+    }
+    const exitedAtMs = parseTimestampMs(
+      latestExpiredWorker.lastExitedAt ?? latestExpiredWorker.updatedAt,
+    );
+    if (exitedAtMs === null) {
+      return false;
+    }
+    return this.now().getTime() - exitedAtMs < ENGINE_FAILURE_COOLDOWN_MS;
   }
 
   private async finalizeWorkerRun(params: {
