@@ -51,6 +51,13 @@ type WorkerEngineAdapter = {
   defaultModel: string;
 };
 
+type WorkerEngineHealth = {
+  engine: WorkerEngineAdapter;
+  commandPath?: string;
+  authHealth: CodeWorkerAuthHealth;
+  healthy: boolean;
+};
+
 const WORKER_ENGINE_ADAPTERS: Record<CodeWorkerEngineId, WorkerEngineAdapter> = {
   codex: {
     engineId: "codex",
@@ -63,6 +70,7 @@ const WORKER_ENGINE_ADAPTERS: Record<CodeWorkerEngineId, WorkerEngineAdapter> = 
     defaultModel: DEFAULT_CLAUDE_WORKER_MODEL,
   },
 };
+const TASK_ENGINE_HINT_PATTERN = /\[engine:(codex|claude)\]/i;
 
 type WorkerStopIntent = "paused" | "cancelled" | null;
 
@@ -204,6 +212,17 @@ function buildSelfDriveWorkerName(
 function buildSelfDriveObjective(task: CodeTask): string {
   const taskFocus = task.goal?.trim() || task.notes?.trim() || task.title;
   return `${taskFocus}\n\n${SELF_DRIVE_POLICY}`;
+}
+
+function resolveTaskPreferredEngine(task: CodeTask): CodeWorkerEngineId | null {
+  const haystacks = [task.title, task.goal, task.notes];
+  for (const value of haystacks) {
+    const match = value?.match(TASK_ENGINE_HINT_PATTERN);
+    if (match?.[1] === "claude" || match?.[1] === "codex") {
+      return match[1];
+    }
+  }
+  return null;
 }
 
 function parseFastTodoItems(markdown: string): string[] {
@@ -578,6 +597,113 @@ class CodeCockpitRuntime {
     await updateCodeTaskStatus(taskId, "in_progress").catch(() => undefined);
   }
 
+  private buildBackendEnv(preparedBackend: PreparedBackend) {
+    const env = { ...process.env, ...preparedBackend.backend.env };
+    for (const key of preparedBackend.backend.clearEnv ?? []) {
+      delete env[key];
+    }
+    return env;
+  }
+
+  private async checkWorkerEngineHealth(
+    engine: WorkerEngineAdapter,
+    repoRoot: string,
+  ): Promise<WorkerEngineHealth> {
+    const backendResolved = this.resolveCliBackendConfig(engine.backendId, this.loadConfig());
+    if (!backendResolved) {
+      return { engine, authHealth: "missing", healthy: false };
+    }
+
+    const preparedBackend = await this.prepareCliBundleMcpConfig({
+      backendId: backendResolved.id,
+      backend: backendResolved.config,
+      workspaceDir: repoRoot,
+      config: this.loadConfig(),
+      warn: () => {},
+    });
+    const env = this.buildBackendEnv(preparedBackend);
+    const commandPath = preparedBackend.backend.command;
+
+    const healthResult = await this.runCommandWithTimeout(
+      engine.engineId === "claude"
+        ? [commandPath, "auth", "status"]
+        : [commandPath, "login", "status"],
+      { timeoutMs: 10_000, cwd: repoRoot, env },
+    ).catch((error) => ({
+      code: 1,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : String(error),
+      pid: undefined,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+
+    const output = `${healthResult.stdout}\n${healthResult.stderr}`;
+    if (engine.engineId === "claude") {
+      if (/"loggedIn"\s*:\s*true/.test(output)) {
+        return { engine, commandPath, authHealth: "healthy", healthy: true };
+      }
+      if (/"loggedIn"\s*:\s*false/.test(output)) {
+        return { engine, commandPath, authHealth: "missing", healthy: false };
+      }
+      const authHealth = inferAuthHealth({
+        stdout: healthResult.stdout,
+        stderr: healthResult.stderr,
+        success: healthResult.code === 0,
+      });
+      return {
+        engine,
+        commandPath,
+        authHealth: authHealth === "unknown" ? "missing" : authHealth,
+        healthy: false,
+      };
+    }
+
+    if (healthResult.code === 0) {
+      return { engine, commandPath, authHealth: "healthy", healthy: true };
+    }
+    return {
+      engine,
+      commandPath,
+      authHealth: inferAuthHealth({
+        stdout: healthResult.stdout,
+        stderr: healthResult.stderr,
+        success: false,
+      }),
+      healthy: false,
+    };
+  }
+
+  private async resolveSupervisorEngine(task: CodeTask, repoRoot: string) {
+    const healthEntries = await Promise.all(
+      Object.values(WORKER_ENGINE_ADAPTERS).map(
+        async (engine) => await this.checkWorkerEngineHealth(engine, repoRoot),
+      ),
+    );
+    const healthByEngine = Object.fromEntries(
+      healthEntries.map((entry) => [entry.engine.engineId, entry]),
+    ) as Record<CodeWorkerEngineId, WorkerEngineHealth>;
+    const preferredEngine = resolveTaskPreferredEngine(task);
+    if (preferredEngine) {
+      const preferred = healthByEngine[preferredEngine];
+      if (preferred?.healthy) {
+        return { selected: preferred, reason: null as string | null };
+      }
+      return {
+        selected: null,
+        reason: `preferred-engine-unhealthy:${preferredEngine}`,
+      };
+    }
+    if (healthByEngine.codex?.healthy) {
+      return { selected: healthByEngine.codex, reason: null as string | null };
+    }
+    if (healthByEngine.claude?.healthy) {
+      return { selected: healthByEngine.claude, reason: null as string | null };
+    }
+    return { selected: null, reason: "no-healthy-engine" };
+  }
+
   private async finalizeWorkerRun(params: {
     workerId: string;
     taskId: string;
@@ -785,10 +911,7 @@ class CodeCockpitRuntime {
       lastStartedAt: nowIso(this.now),
     });
 
-    const env = { ...process.env, ...preparedBackend.backend.env };
-    for (const key of preparedBackend.backend.clearEnv ?? []) {
-      delete env[key];
-    }
+    const env = this.buildBackendEnv(preparedBackend);
 
     const active = this.createEmptyActiveRun(
       worker.id,
@@ -1009,26 +1132,48 @@ class CodeCockpitRuntime {
       return { action: "noop", reason: "no-eligible-work" };
     }
 
-    await this.markTaskInProgress(candidate.task.id);
-
     if (candidate.action === "start") {
+      await this.markTaskInProgress(candidate.task.id);
       const started = await this.startWorker({ workerId: candidate.worker.id });
       return { action: "started", task: candidate.task, worker: started.worker, run: started.run };
     }
 
     if (candidate.action === "resume") {
+      await this.markTaskInProgress(candidate.task.id);
       const resumed = await this.resumeWorker({ workerId: candidate.worker.id });
       return { action: "resumed", task: candidate.task, worker: resumed.worker, run: resumed.run };
     }
 
+    const selectedRepoRoot = candidate.task.repoRoot ?? repoRoot;
+    if (!selectedRepoRoot) {
+      throw new Error(
+        `Task "${candidate.task.id}" must define a repo root before self-drive can run`,
+      );
+    }
+    const engineSelection = await this.resolveSupervisorEngine(candidate.task, selectedRepoRoot);
+    if (!engineSelection.selected) {
+      await updateCodeTaskStatus(candidate.task.id, "blocked").catch(() => undefined);
+      const refreshedStore = await loadCodeCockpitStore();
+      const blockedTask =
+        refreshedStore.tasks.find((entry) => entry.id === candidate.task.id) ?? candidate.task;
+      return {
+        action: "noop",
+        reason: engineSelection.reason ?? "no-healthy-engine",
+        task: blockedTask,
+      };
+    }
+
     const store = await loadCodeCockpitStore();
+    await this.markTaskInProgress(candidate.task.id);
     const worker = await createCodeWorkerSession({
       taskId: candidate.task.id,
       name: buildSelfDriveWorkerName(candidate.task, store.workers),
       repoRoot: candidate.task.repoRoot,
       objective: buildSelfDriveObjective(candidate.task),
-      engineId: "codex",
-      engineModel: DEFAULT_CODEX_WORKER_MODEL,
+      engineId: engineSelection.selected.engine.engineId,
+      engineModel: engineSelection.selected.engine.defaultModel,
+      commandPath: engineSelection.selected.commandPath,
+      authHealth: engineSelection.selected.authHealth,
     });
     const started = await this.startWorker({ workerId: worker.id });
     const refreshedStore = await loadCodeCockpitStore();

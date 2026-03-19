@@ -77,6 +77,32 @@ async function runCommandWithTimeoutStub(
   argv: string[],
   optionsOrTimeout: number | { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) {
+  if (argv[0] === "codex" && argv[1] === "login" && argv[2] === "status") {
+    return {
+      pid: undefined,
+      stdout: "logged in\n",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    };
+  }
+  if (argv[0] === "claude" && argv[1] === "auth" && argv[2] === "status") {
+    return {
+      pid: undefined,
+      stdout: JSON.stringify({
+        loggedIn: false,
+        authMethod: "none",
+        apiProvider: "firstParty",
+      }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    };
+  }
   const options =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   try {
@@ -113,6 +139,44 @@ async function runCommandWithTimeoutStub(
       termination: "exit" as const,
     };
   }
+}
+
+function createRunCommandWithEngineHealthStub(params: {
+  codexHealthy?: boolean;
+  claudeHealthy?: boolean;
+}) {
+  return async (
+    argv: string[],
+    optionsOrTimeout: number | { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
+  ) => {
+    if (argv[0] === "codex" && argv[1] === "login" && argv[2] === "status") {
+      return {
+        pid: undefined,
+        stdout: params.codexHealthy === false ? "" : "logged in\n",
+        stderr: params.codexHealthy === false ? "login required" : "",
+        code: params.codexHealthy === false ? 1 : 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    }
+    if (argv[0] === "claude" && argv[1] === "auth" && argv[2] === "status") {
+      return {
+        pid: undefined,
+        stdout: JSON.stringify({
+          loggedIn: params.claudeHealthy === true,
+          authMethod: params.claudeHealthy === true ? "oauth_token" : "none",
+          apiProvider: "firstParty",
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    }
+    return await runCommandWithTimeoutStub(argv, optionsOrTimeout);
+  };
 }
 
 async function initRepo(root: string) {
@@ -644,5 +708,95 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns[0]?.input.argv).toEqual(
       expect.arrayContaining(["codex", "exec", "resume", "thread-existing"]),
     );
+  });
+
+  it("falls back to Claude when Codex is unhealthy but Claude is available", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] Review the current logs with Claude\n",
+      "utf8",
+    );
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: false,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.worker).toMatchObject({
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+      backendId: "claude-cli",
+      authHealth: "healthy",
+    });
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["claude", "-p"]));
+  });
+
+  it("blocks a preferred-engine task when its requested engine is unavailable", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] [engine:claude] Review the remote auth loop\n",
+      "utf8",
+    );
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: false,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result).toMatchObject({
+      action: "noop",
+      reason: "preferred-engine-unhealthy:claude",
+      task: {
+        title: "[engine:claude] Review the remote auth loop",
+        status: "blocked",
+      },
+    });
+    expect(pendingRuns).toHaveLength(0);
   });
 });

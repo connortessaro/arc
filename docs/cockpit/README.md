@@ -20,6 +20,7 @@ Implemented:
 - macOS Swift toolchain helper so cockpit smoke tests build under full Xcode
 - self-drive supervisor loop with Codex and Claude worker engines
 - source-based VPS gateway runner and self-drive systemd installer
+- VPS-first canonical repo/runtime workflow for async Arc development
 
 Not implemented yet:
 
@@ -40,6 +41,15 @@ Useful VPS commands:
 cd /srv/arc/repo
 bash scripts/arc-self-drive/status.sh
 bash scripts/arc-self-drive/deploy.sh
+bash scripts/arc-self-drive/run-supervisor-tick.sh --repo /srv/arc/repo
+```
+
+Persist Claude for unattended service use:
+
+```bash
+cd /srv/arc/repo
+export CLAUDE_CODE_OAUTH_TOKEN='...'
+bash scripts/arc-self-drive/install-engine-auth.sh
 ```
 
 5. `docs/cockpit/TODO.md`
@@ -112,6 +122,8 @@ The system is now split correctly:
 
 - OpenClaw owns worker orchestration and durable state
 - the macOS app owns the future cockpit UX
+- the VPS checkout is the canonical async development runtime
+- the Mac stays responsible for Swift/macOS verification
 
 The next work should make the native window useful, not broaden the backend
 without an operator surface.

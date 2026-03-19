@@ -57,12 +57,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 pnpm --dir "$ROOT_DIR" install --frozen-lockfile
-python3 "$ROOT_DIR/scripts/arc-self-drive/configure-cli-backends.py" >/dev/null
-
-systemctl --user daemon-reload
-systemctl --user stop arc-self-drive.service >/dev/null 2>&1 || true
-systemctl --user restart openclaw-gateway.service
-systemctl --user enable --now arc-self-drive.timer >/dev/null
+bash "$ROOT_DIR/scripts/arc-self-drive/install-systemd.sh" >/dev/null
 
 deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
 until curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do

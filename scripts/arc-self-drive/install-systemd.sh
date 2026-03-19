@@ -3,9 +3,13 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
+ENV_DIR="${HOME}/.config/arc-self-drive"
 GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+SELF_DRIVE_INTERVAL="${ARC_SELF_DRIVE_INTERVAL:-2m}"
+SELF_DRIVE_DELAY="${ARC_SELF_DRIVE_DELAY:-15s}"
 
 mkdir -p "$SYSTEMD_DIR"
+mkdir -p "$ENV_DIR"
 
 python3 "${ROOT_DIR}/scripts/arc-self-drive/configure-cli-backends.py" >/dev/null
 
@@ -27,6 +31,7 @@ KillMode=control-group
 Environment=HOME=${HOME}
 Environment=TMPDIR=/tmp
 Environment=PATH=${ROOT_DIR}/node_modules/.bin:/usr/bin:/usr/local/bin:/bin:${HOME}/.local/bin:${HOME}/.npm-global/bin
+EnvironmentFile=-%h/.config/arc-self-drive/engine.env
 Environment=OPENCLAW_GATEWAY_PORT=${GATEWAY_PORT}
 Environment=OPENCLAW_SYSTEMD_UNIT=openclaw-gateway.service
 Environment=OPENCLAW_SERVICE_MARKER=openclaw
@@ -49,17 +54,18 @@ WorkingDirectory=${ROOT_DIR}
 Environment=HOME=${HOME}
 Environment=TMPDIR=/tmp
 Environment=PATH=${ROOT_DIR}/node_modules/.bin:/usr/bin:/usr/local/bin:/bin:${HOME}/.local/bin:${HOME}/.npm-global/bin
-ExecStart=/usr/bin/node --import tsx ${ROOT_DIR}/scripts/arc-self-drive/supervisor-tick.ts --repo ${ROOT_DIR}
+EnvironmentFile=-%h/.config/arc-self-drive/engine.env
+ExecStart=${ROOT_DIR}/scripts/arc-self-drive/run-supervisor-tick.sh --repo ${ROOT_DIR}
 EOF
 
 cat >"${SYSTEMD_DIR}/arc-self-drive.timer" <<EOF
 [Unit]
-Description=Run Arc self-drive supervisor every 10 minutes
+Description=Run Arc self-drive supervisor continuously
 
 [Timer]
-OnBootSec=2m
-OnUnitActiveSec=10m
-RandomizedDelaySec=60
+OnBootSec=30s
+OnUnitActiveSec=${SELF_DRIVE_INTERVAL}
+RandomizedDelaySec=${SELF_DRIVE_DELAY}
 Persistent=true
 Unit=arc-self-drive.service
 
@@ -68,7 +74,9 @@ WantedBy=timers.target
 EOF
 
 systemctl --user daemon-reload
-systemctl --user enable --now openclaw-gateway.service
-systemctl --user enable --now arc-self-drive.timer
+systemctl --user enable openclaw-gateway.service >/dev/null
+systemctl --user restart openclaw-gateway.service
+systemctl --user enable arc-self-drive.timer >/dev/null
+systemctl --user restart arc-self-drive.timer
 
 echo "Installed openclaw-gateway.service and arc-self-drive.timer for ${ROOT_DIR}"

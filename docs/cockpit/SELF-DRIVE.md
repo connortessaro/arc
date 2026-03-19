@@ -4,9 +4,10 @@ Arc can now run a constrained self-drive loop on the VPS:
 
 - it bootstraps work from `docs/cockpit/FAST-TODO.md`
 - it creates isolated worktree workers
-- it starts or resumes one eligible worker at a time
+- it keeps polling for the next eligible worker without waiting for chat prompts
 - it allows local branch commits
 - it does not push or merge
+- it treats `/srv/arc/repo` as the canonical Arc checkout
 
 ## Commands
 
@@ -20,7 +21,7 @@ Run one supervisor cycle directly from source on the VPS:
 
 ```bash
 cd /srv/arc/repo
-node --import tsx scripts/arc-self-drive/supervisor-tick.ts --repo /srv/arc/repo
+bash scripts/arc-self-drive/run-supervisor-tick.sh --repo /srv/arc/repo
 ```
 
 Check gateway and engine health on the VPS:
@@ -35,6 +36,14 @@ Install the source-based gateway service and self-drive timer on the VPS:
 ```bash
 cd /srv/arc/repo
 bash scripts/arc-self-drive/install-systemd.sh
+```
+
+Persist Claude's unattended token from the current VPS shell into the service/timer environment:
+
+```bash
+cd /srv/arc/repo
+export CLAUDE_CODE_OAUTH_TOKEN='...'
+bash scripts/arc-self-drive/install-engine-auth.sh
 ```
 
 Deploy the current branch to the VPS checkout and restart the runtime cleanly:
@@ -60,12 +69,15 @@ Install notes:
   - `codex-cli` uses the user-local CLI binary under `~/.npm-global/bin/codex`
   - Codex workers run with `--dangerously-bypass-approvals-and-sandbox` on the VPS
   - `claude-cli` points at `~/.npm-global/bin/claude`
+- the systemd units now read `~/.config/arc-self-drive/engine.env` if it exists
+- `healthcheck.sh` reports whether that env file exists, so unattended auth drift is visible
+- add `[engine:claude]` or `[engine:codex]` to a task title/goal/notes when a task must use one engine
 
 ## Current Policy
 
 - one worker per supervisor tick
-- default engine is Codex
-- Claude is available as an engine adapter when the CLI is installed and authenticated
+- default engine order is Codex first, then Claude as fallback when Codex is unavailable
+- Claude becomes fully unattended only after its token is persisted into the service env file
 - self-drive tasks are imported from unchecked items in `docs/cockpit/FAST-TODO.md`
 - completed work lands in review; self-drive does not push or merge
-- `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites CLI backend config, restarts the gateway, and leaves the timer enabled
+- `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled

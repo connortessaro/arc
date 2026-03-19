@@ -32,8 +32,8 @@ Arc becomes the default when these are all done:
 
 ## Phase C: Always-On
 
-- [ ] Add durable async orchestration mode
-- [ ] Add VPS/hybrid control-plane path if still needed
+- [x] Add durable async orchestration mode
+- [x] Add VPS/hybrid control-plane path if still needed
 
 ## Not Now
 
