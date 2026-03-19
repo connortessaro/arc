@@ -9,7 +9,7 @@ possible. Keep `docs/cockpit/TODO.md` as the long backlog.
 
 Arc becomes the default when these are all done:
 
-- [ ] manage workers in-app
+- [x] manage workers in-app
 - [ ] inspect logs and latest run state in-app
 - [ ] route completed and blocked work into clear queues
 - [ ] reopen the app without losing project context

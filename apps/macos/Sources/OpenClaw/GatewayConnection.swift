@@ -97,6 +97,7 @@ actor GatewayConnection {
         case cronAdd = "cron.add"
         case cronStatus = "cron.status"
         case codeCockpitSummary = "code.cockpit.summary"
+        case codeSupervisorTick = "code.supervisor.tick"
         case codeWorkerStart = "code.worker.start"
         case codeWorkerSend = "code.worker.send"
         case codeWorkerPause = "code.worker.pause"
@@ -789,6 +790,17 @@ extension GatewayConnection {
 
     func codeCockpitSummary() async throws -> CockpitWorkspaceSummary {
         try await self.requestDecoded(method: .codeCockpitSummary, timeoutMs: 10000)
+    }
+
+    func codeSupervisorTick(repoRoot: String?) async throws -> CockpitSupervisorTickResult {
+        var params: [String: AnyCodable] = [:]
+        if let repoRoot, !repoRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            params["repoRoot"] = AnyCodable(repoRoot)
+        }
+        return try await self.requestDecoded(
+            method: .codeSupervisorTick,
+            params: params.isEmpty ? nil : params,
+            timeoutMs: 15000)
     }
 
     func codeWorkerStart(workerId: String) async throws {

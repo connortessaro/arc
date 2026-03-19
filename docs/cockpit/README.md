@@ -33,6 +33,15 @@ Not implemented yet:
 2. `docs/cockpit/ARCHITECTURE.md`
 3. `docs/cockpit/FAST-TODO.md`
 4. `docs/cockpit/SELF-DRIVE.md`
+
+Useful VPS commands:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/status.sh
+bash scripts/arc-self-drive/deploy.sh
+```
+
 5. `docs/cockpit/TODO.md`
 6. `docs/plans/2026-03-19-elite-developer-cockpit-v1.md`
 

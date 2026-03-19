@@ -43,7 +43,7 @@ plane while internal code symbols still use `Cockpit*`.
 
 The cockpit becomes a real daily-driver app when all of these are true:
 
-- [ ] You can open one native window and manage workers there
+- [x] You can open one native window and manage workers there
 - [ ] You can inspect logs and run state without dropping to terminal
 - [ ] You can review finished work in a dedicated lane
 - [ ] You can keep local terminal lanes inside the same app

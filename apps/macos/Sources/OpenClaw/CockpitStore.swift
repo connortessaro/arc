@@ -5,6 +5,7 @@ import OSLog
 typealias CockpitSummaryLoader = @Sendable () async throws -> CockpitWorkspaceSummary
 typealias CockpitGatewayStatusLoader = @Sendable () async throws -> CockpitGatewayStatus
 typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerLogs
+typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
 
@@ -42,6 +43,7 @@ final class CockpitStore {
     var selectedWorkerId: String?
     var selectedWorkerLogs: CockpitWorkerLogs?
     var isLoadingWorkerLogs = false
+    var isStartingNextWorker = false
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
@@ -51,6 +53,7 @@ final class CockpitStore {
     private let loadGatewayStatus: CockpitGatewayStatusLoader
     private let loadSummary: CockpitSummaryLoader
     private let loadWorkerLogs: CockpitWorkerLogsLoader
+    private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
 
@@ -62,11 +65,20 @@ final class CockpitStore {
         return snapshot.activeLanes.first(where: { $0.workerId == selectedWorkerId }) ?? snapshot.activeLanes.first
     }
 
+    var projectRootLabel: String? {
+        Self.resolveProjectRoot(snapshot: self.snapshot, selectedLane: self.selectedLane)
+    }
+
+    var canStartNextWorker: Bool {
+        self.projectRootLabel != nil && self.gatewayStatus?.state == .ready
+    }
+
     init(
         isPreview: Bool = ProcessInfo.processInfo.isPreview,
         loadGatewayStatus: CockpitGatewayStatusLoader? = nil,
         loadSummary: CockpitSummaryLoader? = nil,
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
+        performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
         reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
     {
@@ -81,6 +93,9 @@ final class CockpitStore {
         }
         self.loadWorkerLogs = loadWorkerLogs ?? { workerId in
             try await GatewayConnection.shared.codeWorkerLogs(workerId: workerId)
+        }
+        self.performSupervisorTickImpl = performSupervisorTick ?? { repoRoot in
+            try await GatewayConnection.shared.codeSupervisorTick(repoRoot: repoRoot)
         }
         self.performWorkerActionImpl = performWorkerAction ?? { action, workerId in
             switch action {
@@ -97,6 +112,27 @@ final class CockpitStore {
         self.reconnectRemoteGatewayImpl = reconnectRemoteGateway ?? {
             _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
             await GatewayEndpointStore.shared.refresh()
+        }
+    }
+
+    func startNextWorker() async {
+        guard !self.isStartingNextWorker else { return }
+        guard self.canStartNextWorker else { return }
+
+        self.isStartingNextWorker = true
+        self.lastError = nil
+        defer { self.isStartingNextWorker = false }
+
+        do {
+            let result = try await self.performSupervisorTickImpl(self.projectRootLabel)
+            if let workerId = result.worker?.id {
+                self.selectedWorkerId = workerId
+            }
+            await self.refresh()
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit supervisor tick failed \(message, privacy: .public)")
+            self.lastError = message
         }
     }
 
@@ -172,6 +208,43 @@ final class CockpitStore {
             self.logger.error("code cockpit worker action failed \(message, privacy: .public)")
             self.lastError = message
         }
+    }
+
+    private static func resolveProjectRoot(
+        snapshot: CockpitWorkspaceSummary?,
+        selectedLane: CockpitLaneSummary?) -> String?
+    {
+        if let repoRoot = self.normalizeProjectRoot(selectedLane?.repoRoot) {
+            return repoRoot
+        }
+        if let snapshot {
+            for lane in snapshot.activeLanes {
+                if let repoRoot = self.normalizeProjectRoot(lane.repoRoot) {
+                    return repoRoot
+                }
+            }
+            for task in snapshot.recentTasks {
+                if let repoRoot = self.normalizeProjectRoot(task.repoRoot) {
+                    return repoRoot
+                }
+            }
+            for worker in snapshot.recentWorkers {
+                if let repoRoot = self.normalizeProjectRoot(worker.repoRoot) {
+                    return repoRoot
+                }
+            }
+        }
+
+        let connection = CommandResolver.connectionSettings()
+        if connection.mode == .remote {
+            return self.normalizeProjectRoot(connection.projectRoot)
+        }
+        return self.normalizeProjectRoot(CommandResolver.projectRootPath())
+    }
+
+    private static func normalizeProjectRoot(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func reconcileSelection() {
