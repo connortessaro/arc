@@ -665,6 +665,44 @@ describe("code cockpit runtime", () => {
     );
   });
 
+  it("skips already-completed FAST-TODO items and boots the next unchecked task", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] inspect logs and latest run state in-app\n- [ ] route completed and blocked work into clear queues\n",
+      "utf8",
+    );
+    await store.createCodeTask({
+      title: "inspect logs and latest run state in-app",
+      repoRoot: tempRepoRoot,
+      status: "done",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) =>
+        provider === "codex-cli" ? { id: "codex-cli", config: backend } : null,
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(result.task).toMatchObject({
+      title: "route completed and blocked work into clear queues",
+      repoRoot: tempRepoRoot,
+      status: "in_progress",
+    });
+    expect(pendingRuns).toHaveLength(1);
+  });
+
   it("resumes a paused worker before creating new self-drive work", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
