@@ -22,6 +22,7 @@ Implemented:
 - source-based VPS gateway runner and self-drive systemd installer
 - VPS-first canonical repo/runtime workflow for async Arc development
 - Claude-first self-drive routing with Codex fallback on the VPS
+- review-gated self-drive with queue-first task selection and a 3-review cap
 
 Not implemented yet:
 

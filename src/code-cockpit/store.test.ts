@@ -207,6 +207,78 @@ describe("code cockpit store", () => {
     });
   });
 
+  it("resolves review statuses into task and worker progression", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Review progression",
+      status: "review",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "review-worker",
+      status: "awaiting_review",
+    });
+    const review = await storeModule.createCodeReviewRequest({
+      taskId: task.id,
+      workerId: worker.id,
+      title: "Approve the work",
+    });
+
+    const approved = await storeModule.resolveCodeReviewRequestStatus(review.id, "approved");
+
+    expect(approved.review).toMatchObject({ status: "approved" });
+    expect(approved.task).toMatchObject({ status: "done" });
+    expect(approved.worker).toMatchObject({ status: "completed" });
+
+    const reworkTask = await storeModule.createCodeTask({
+      title: "Need another pass",
+      status: "review",
+    });
+    const reworkWorker = await storeModule.createCodeWorkerSession({
+      taskId: reworkTask.id,
+      name: "rework-worker",
+      status: "awaiting_review",
+    });
+    const reworkReview = await storeModule.createCodeReviewRequest({
+      taskId: reworkTask.id,
+      workerId: reworkWorker.id,
+      title: "Request changes",
+    });
+
+    const changesRequested = await storeModule.resolveCodeReviewRequestStatus(
+      reworkReview.id,
+      "changes_requested",
+    );
+
+    expect(changesRequested.review).toMatchObject({ status: "changes_requested" });
+    expect(changesRequested.task).toMatchObject({ status: "in_progress" });
+    expect(changesRequested.worker).toMatchObject({ status: "failed" });
+
+    const cancelledTask = await storeModule.createCodeTask({
+      title: "Drop this review",
+      status: "review",
+    });
+    const cancelledWorker = await storeModule.createCodeWorkerSession({
+      taskId: cancelledTask.id,
+      name: "dismiss-worker",
+      status: "awaiting_review",
+    });
+    const dismissedReview = await storeModule.createCodeReviewRequest({
+      taskId: cancelledTask.id,
+      workerId: cancelledWorker.id,
+      title: "Dismiss this work",
+    });
+
+    const dismissed = await storeModule.resolveCodeReviewRequestStatus(
+      dismissedReview.id,
+      "dismissed",
+    );
+
+    expect(dismissed.review).toMatchObject({ status: "dismissed" });
+    expect(dismissed.task).toMatchObject({ status: "cancelled" });
+    expect(dismissed.worker).toMatchObject({ status: "awaiting_review" });
+  });
+
   it("builds a workspace summary with active lanes and recent runs", async () => {
     const storeModule = await importStoreModule();
     const task = await storeModule.createCodeTask({

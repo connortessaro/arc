@@ -29,8 +29,8 @@ import {
   createCodeWorkerSession,
   getCodeCockpitSummary,
   loadCodeCockpitStore,
+  resolveCodeReviewRequestStatus,
   resolveCodeCockpitStorePath,
-  updateCodeReviewRequestStatus,
   updateCodeTaskStatus,
   updateCodeWorkerSessionStatus,
 } from "../code-cockpit/store.js";
@@ -748,12 +748,20 @@ export async function codeReviewStatusCommand(
   opts: CodeReviewStatusOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const review = await updateCodeReviewRequestStatus(
+  const resolved = await resolveCodeReviewRequestStatus(
     reviewId,
     ensureReviewStatus(status) ?? "pending",
     buildStoreOptions(),
   );
-  emitEntity(runtime, opts.json, review, [`Updated review ${describeReview(review)}`]);
+  if (opts.json) {
+    emitJson(runtime, resolved);
+    return;
+  }
+  runtime.log(`Updated review ${describeReview(resolved.review)}`);
+  runtime.log(`Task ${describeTask(resolved.task)}`);
+  if (resolved.worker) {
+    runtime.log(`Worker ${describeWorker(resolved.worker)}`);
+  }
 }
 
 export async function codeMemoryAddCommand(

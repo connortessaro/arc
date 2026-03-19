@@ -207,6 +207,12 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   activeLanes: CodeCockpitLaneSummary[];
 };
 
+export type CodeResolvedReviewResult = {
+  review: CodeReviewRequest;
+  task: CodeTask;
+  worker: CodeWorkerSession | null;
+};
+
 export type CodeCockpitStoreOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -843,6 +849,51 @@ export async function updateCodeReviewRequestStatus(
     review.status = status;
     review.updatedAt = updatedAt;
     return review;
+  });
+}
+
+export async function resolveCodeReviewRequestStatus(
+  reviewId: string,
+  nextStatus: CodeReviewStatus,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeResolvedReviewResult> {
+  const status = assertReviewStatus(nextStatus);
+  return await mutateStore(options, (store, updatedAt) => {
+    const review = findReview(store, reviewId);
+    assertTransition("review", REVIEW_TRANSITIONS, review.status, status);
+    review.status = status;
+    review.updatedAt = updatedAt;
+
+    const task = findTask(store, review.taskId);
+    const worker = review.workerId ? findWorker(store, review.workerId) : null;
+
+    if (status === "approved") {
+      assertTransition("task", TASK_TRANSITIONS, task.status, "done");
+      task.status = "done";
+      task.updatedAt = updatedAt;
+      if (worker) {
+        assertTransition("worker", WORKER_TRANSITIONS, worker.status, "completed");
+        worker.status = "completed";
+        worker.updatedAt = updatedAt;
+      }
+    } else if (status === "changes_requested") {
+      if (task.status === "review") {
+        assertTransition("task", TASK_TRANSITIONS, task.status, "in_progress");
+        task.status = "in_progress";
+        task.updatedAt = updatedAt;
+      }
+      if (worker) {
+        assertTransition("worker", WORKER_TRANSITIONS, worker.status, "failed");
+        worker.status = "failed";
+        worker.updatedAt = updatedAt;
+      }
+    } else if (status === "dismissed") {
+      assertTransition("task", TASK_TRANSITIONS, task.status, "cancelled");
+      task.status = "cancelled";
+      task.updatedAt = updatedAt;
+    }
+
+    return { review, task, worker };
   });
 }
 

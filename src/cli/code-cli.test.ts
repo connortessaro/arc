@@ -199,4 +199,70 @@ describe("code cli", () => {
       engineModel: "claude-sonnet-4-6",
     });
   });
+
+  it("updates review status and applies task/worker progression through the CLI", async () => {
+    const { program, defaultRuntime } = await createProgram();
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    await program.parseAsync(
+      ["code", "task", "add", "Review this change", "--status", "review", "--json"],
+      { from: "user" },
+    );
+    const task = firstLoggedJson(log);
+    log.mockClear();
+
+    await program.parseAsync(
+      [
+        "code",
+        "worker",
+        "add",
+        "--task",
+        String(task.id),
+        "--name",
+        "reviewer",
+        "--status",
+        "awaiting_review",
+        "--json",
+      ],
+      { from: "user" },
+    );
+    const worker = firstLoggedJson(log);
+    log.mockClear();
+
+    await program.parseAsync(
+      [
+        "code",
+        "review",
+        "add",
+        "Ready for approval",
+        "--task",
+        String(task.id),
+        "--worker",
+        String(worker.id),
+        "--json",
+      ],
+      { from: "user" },
+    );
+    const review = firstLoggedJson(log);
+    log.mockClear();
+
+    await program.parseAsync(
+      ["code", "review", "status", String(review.id), "approved", "--json"],
+      { from: "user" },
+    );
+    const resolved = firstLoggedJson(log);
+
+    expect(resolved.review).toMatchObject({
+      id: review.id,
+      status: "approved",
+    });
+    expect(resolved.task).toMatchObject({
+      id: task.id,
+      status: "done",
+    });
+    expect(resolved.worker).toMatchObject({
+      id: worker.id,
+      status: "completed",
+    });
+  });
 });
