@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+WAIT_TIMEOUT_SECONDS="${ARC_SELF_DRIVE_GATEWAY_WAIT_SECONDS:-180}"
 
 require_clean_checkout() {
   if ! git -C "$ROOT_DIR" diff --quiet --ignore-submodules --; then
@@ -61,5 +63,15 @@ systemctl --user daemon-reload
 systemctl --user stop arc-self-drive.service >/dev/null 2>&1 || true
 systemctl --user restart openclaw-gateway.service
 systemctl --user enable --now arc-self-drive.timer >/dev/null
+
+deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
+until curl -fsS "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do
+  if (( SECONDS >= deadline )); then
+    echo "Gateway did not become healthy within ${WAIT_TIMEOUT_SECONDS}s." >&2
+    systemctl --user status openclaw-gateway.service --no-pager >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
 
 bash "$ROOT_DIR/scripts/arc-self-drive/healthcheck.sh"
