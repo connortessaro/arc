@@ -543,13 +543,12 @@ class CodeCockpitRuntime {
     const store = await loadCodeCockpitStore();
     for (const title of items) {
       const existing = store.tasks.find(
-        (entry) =>
-          entry.title === title &&
-          entry.repoRoot === repoRoot &&
-          entry.status !== "done" &&
-          entry.status !== "cancelled",
+        (entry) => entry.title === title && entry.repoRoot === repoRoot,
       );
       if (existing) {
+        if (existing.status === "done" || existing.status === "cancelled") {
+          continue;
+        }
         return existing;
       }
       return await createCodeTask({
