@@ -15,6 +15,7 @@ REPAIRABLE_REGISTRY_PACKAGES=(
   "https-proxy-agent"
   "markdown-it"
   "playwright-core"
+  "undici"
   "ws"
   "zod"
 )
@@ -88,9 +89,7 @@ repair_registry_package() {
 repair_broken_registry_packages() {
   local package_name
   for package_name in "${REPAIRABLE_REGISTRY_PACKAGES[@]}"; do
-    if [[ ! -f "$ROOT_DIR/node_modules/$package_name/package.json" ]]; then
-      repair_registry_package "$package_name"
-    fi
+    repair_registry_package "$package_name"
   done
 }
 
