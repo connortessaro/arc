@@ -77,6 +77,25 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/install-systemd.sh
 ```
 
+Configure Telegram runtime alerts and the hourly summary job:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/configure-telegram-monitoring.sh
+```
+
+If you want to stage the units before entering the bot token, seed the template only:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/install-telegram-monitoring.sh
+```
+
+That writes `~/.config/arc-self-drive/telegram-watchdog.env`, installs the
+`arc-telegram-watchdog.service` plus `arc-telegram-watchdog.timer` user units,
+and configures an hourly OpenClaw cron summary once `ARC_TELEGRAM_BOT_TOKEN`
+and `ARC_TELEGRAM_CHAT_ID` are present.
+
 That installer now also installs user-level `arc` and `openclaw` shims into `~/.local/bin`
 and adds `~/.local/bin` plus `~/.npm-global/bin` to the shell `PATH`.
 
@@ -119,10 +138,12 @@ Install notes:
   - Codex workers run with `--dangerously-bypass-approvals-and-sandbox` on the VPS
   - `claude-cli` points at `~/.npm-global/bin/claude`
 - the systemd units now read `~/.config/arc-self-drive/engine.env` if it exists
+- Telegram monitoring reads `~/.config/arc-self-drive/telegram-watchdog.env`
 - `healthcheck.sh` reports whether that env file exists, so unattended auth drift is visible
 - add `[engine:claude]` or `[engine:codex]` to a task title/goal/notes when a task must use one engine
 - set `ARC_SELF_DRIVE_STRICT_ENGINE=claude` in `~/.config/arc-self-drive/engine.env` when the queue must never fall back to Codex
 - if Claude hits a usage-limit or rate-limit style failure, self-drive cools it down for six hours and lets Codex carry the queue
+- the Telegram watchdog sends transition-based alerts directly through the Bot API, so primary runtime alerts still fire even if the OpenClaw gateway scheduler is down
 
 ## Current Policy
 
