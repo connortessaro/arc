@@ -28,6 +28,8 @@ let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
 let helloMethods: string[] | undefined = ["health", "secrets.resolve"];
+let stopAndWaitCalls = 0;
+let pendingStopAndWait: Promise<void> | null = null;
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -70,6 +72,10 @@ vi.mock("./client.js", () => ({
       }
     }
     stop() {}
+    stopAndWait() {
+      stopAndWaitCalls += 1;
+      return pendingStopAndWait ?? Promise.resolve();
+    }
   },
 }));
 
@@ -87,6 +93,8 @@ function resetGatewayCallMocks() {
   closeCode = 1006;
   closeReason = "";
   helloMethods = ["health", "secrets.resolve"];
+  stopAndWaitCalls = 0;
+  pendingStopAndWait = null;
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -602,6 +610,29 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.expectFinal).toBe(true);
     expect(lastRequestOptions?.opts?.timeoutMs).toBeUndefined();
+  });
+
+  it("waits for client teardown before resolving successful requests", async () => {
+    setLocalLoopbackGatewayConfig();
+    let releaseStopAndWait!: () => void;
+    pendingStopAndWait = new Promise<void>((resolve) => {
+      releaseStopAndWait = resolve;
+    });
+
+    let resolved = false;
+    const promise = callGateway({ method: "health" }).then(() => {
+      resolved = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(stopAndWaitCalls).toBe(1);
+      expect(resolved).toBe(false);
+    });
+
+    releaseStopAndWait();
+    await promise;
+
+    expect(resolved).toBe(true);
   });
 
   it("fails fast when remote mode is missing remote url", async () => {
