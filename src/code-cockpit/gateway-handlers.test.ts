@@ -316,4 +316,51 @@ describe("code cockpit gateway handlers", () => {
       undefined,
     );
   });
+
+  it("builds a dashboard snapshot through the gateway-owned runtime", async () => {
+    const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
+    const respond = vi.fn();
+
+    await codeCockpitHandlers["code.cockpit.dashboard"]({
+      req: {
+        method: "code.cockpit.dashboard",
+        id: "1",
+        params: { repoRoot: "/srv/arc/repo" },
+      },
+      params: { repoRoot: "/srv/arc/repo" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(runtimeMethods.getCodeCockpitRuntime).toHaveBeenCalledTimes(1);
+    expect(runtimeMethods.runtime.getWorkspaceSummary).toHaveBeenCalledTimes(1);
+    expect(runtimeMethods.runtime.listTasks).toHaveBeenCalledWith({
+      repoRoot: "/srv/arc/repo",
+    });
+    expect(runtimeMethods.runtime.listReviews).toHaveBeenCalledWith({});
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        repoRoot: "/srv/arc/repo",
+        summary: expect.objectContaining({
+          storePath: "/tmp/openclaw/code-cockpit.json",
+        }),
+        tasks: [
+          expect.objectContaining({
+            id: "task_123",
+            repoRoot: "/srv/arc/repo",
+          }),
+        ],
+        reviews: [
+          expect.objectContaining({
+            id: "review_123",
+            taskId: "task_123",
+          }),
+        ],
+      }),
+      undefined,
+    );
+  });
 });

@@ -11,13 +11,18 @@ Arc can now run a constrained self-drive loop on the VPS:
 - it treats `/srv/arc/repo` as the canonical Arc checkout
 - it can expose `arc` and `openclaw` as real VPS commands so you do not have to remember repo-local script paths
 - `arc` now opens a VPS dashboard TUI by default, so the operator surface does not depend on memorizing subcommands
+- `arc self-drive` is the shortest path to start or inspect the background loop without remembering `daemon` plus `tick`
+- when `arc` runs on a machine without `systemctl` available, it now acts as a thin SSH client to the VPS operator shell instead of trying to boot a second local runtime
 
 ## Commands
 
-Use the VPS operator shell commands after installing the runtime:
+Use these commands from either the VPS shell or your Mac when `arc-droplet` SSH access works.
+On the Mac, `arc` delegates the operator command to the VPS `arc` wrapper over `ssh`:
 
 ```bash
 arc
+arc self-drive
+arc drive status
 arc dashboard
 arc status
 arc do "Build the next Arc feature"
@@ -83,6 +88,13 @@ export CLAUDE_CODE_OAUTH_TOKEN='...'
 bash scripts/arc-self-drive/install-engine-auth.sh
 ```
 
+Persist the Arc-only GitHub token for draft PR publishing from successful worker branches:
+
+```bash
+export ARC_SELF_DRIVE_GITHUB_TOKEN='github_token_here'
+bash scripts/arc-self-drive/install-github-auth.sh
+```
+
 Deploy the current branch to the VPS checkout and restart the runtime cleanly:
 
 ```bash
@@ -116,11 +128,12 @@ Install notes:
 - one worker per supervisor tick
 - default engine order is Claude first, then Codex as fallback when Claude is unavailable or cooling down after a usage-limit failure
 - Claude becomes fully unattended only after its token is persisted into the service env file
+- draft PR publishing becomes fully unattended only after `gh` and `ARC_SELF_DRIVE_GITHUB_TOKEN` are installed through `install-github-auth.sh`
 - task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`
-- `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can be managed from the Mac CLI
+- `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can still be managed from the Mac CLI
 - `scripts/arc-self-drive/mac-remote-code.sh` opens a temporary SSH tunnel, reads the active VPS gateway token, and runs the source CLI in remote mode without changing your global config
 - `scripts/arc-self-drive/run-code-via-gateway.sh` forces `openclaw code` traffic through the live gateway on the VPS instead of mutating the cockpit store directly from a second process
-- `arc` and `openclaw code tui` open the same VPS dashboard; `n` queues a task, `a/c/x` resolve reviews, and `q` exits without stopping the daemon
+- `arc` and `openclaw code tui` open the same VPS dashboard; on the Mac this happens through SSH passthrough to the VPS dashboard, not through a local TypeScript runtime
 - successful unattended runs mark the worker `completed`, mark the task `done`, and let the queue continue
 - failed unattended runs mark the worker `failed` and move the task to `blocked`, so bad work becomes visible instead of silently retrying
 - manual reviews still work when they exist: `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it

@@ -101,6 +101,31 @@ function makeSummary(): CodeCockpitWorkspaceSummary {
 }
 
 describe("arc dashboard renderer", () => {
+  it("renders the local operator-console sections", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [makeReview()],
+      health: {
+        gateway: { status: "active", port: "18789", health: { ok: true, status: "live" } },
+        engines: {
+          claude: { health: "healthy" },
+          codex: { health: "healthy" },
+        },
+      },
+      statusMessage: "Ready. 1 active tasks · 1 items need attention.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("ARC OPERATOR CONSOLE");
+    expect(rendered).toContain("OPERATIONS");
+    expect(rendered).toContain("ATTENTION");
+    expect(rendered).toContain("SYSTEM PULSE");
+    expect(rendered).toContain("RECENT RUNS");
+  });
+
   it("keeps every rendered line within the terminal width for long recent-run summaries", () => {
     const lines = renderArcDashboardForTest({
       width: 158,

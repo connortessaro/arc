@@ -1,13 +1,31 @@
 # Arc Context
 
-Arc is the product/app name. OpenClaw remains the runtime and control plane.
-This folder is the durable context for the native Arc operator shell work. Read
-this before continuing implementation from chat history.
+Arc is the product/app/workstation name.
+OpenClaw remains the runtime and control plane.
 
-## Status
+This folder is the durable context for building Arc as a **personal project
+cockpit**. Read this before continuing implementation from chat history.
 
-As of `2026-03-19`, Arc exists as a real native macOS shell, but it is not a
-daily-driver developer environment yet.
+## Product Direction
+
+Arc is not being built as:
+
+- a generic AI shell
+- a full editor-first IDE
+- a daemon console as the final product
+
+Arc is being built as:
+
+- a global home across projects
+- a project workspace for review and steering
+- a persistent worker system that keeps moving while you are away
+- a workstation that fits real Git/GitHub/open-source collaboration
+
+The center of the product is **review, steering, and momentum**, not prompting.
+
+## Current State
+
+As of `2026-03-20`, Arc has a real backend and an early product shell.
 
 Implemented:
 
@@ -17,32 +35,66 @@ Implemented:
 - workspace summary RPC from gateway to native app
 - native worker controls and selected-worker log panel
 - remote gateway status banner with reconnect path
-- macOS Swift toolchain helper so cockpit smoke tests build under full Xcode
-- self-drive supervisor loop with Codex and Claude worker engines
+- self-drive supervisor loop with Claude-first routing and Codex fallback
 - source-based VPS gateway runner and self-drive systemd installer
 - VPS-first canonical repo/runtime workflow for async Arc development
-- Claude-first self-drive routing with Codex fallback on the VPS
-- queue-first self-drive with auto-continue on successful unattended runs
-- remote-aware `openclaw code task` / `review` commands so the VPS queue can be managed from the Mac CLI
 - VPS operator dashboard via `arc` / `openclaw code tui`
 
 Not implemented yet:
 
-- review/diff/test surface
-- embedded PTY terminal lanes
-- saved per-project cockpit layout
+- review queue UI
+- blocked / needs-input queue UI
+- diff/test/log review lane
+- full project/workspace persistence
+- richer global multi-project home
+
+## What The Swift App Must Become
+
+The Swift app is the flagship Arc surface.
+Its job is to become a real **review workstation**.
+
+That means:
+
+- project header and project context
+- review queue first
+- blocked / needs-input queue
+- worker detail
+- changed files and diffs
+- tests, logs, and run summaries
+
+It does not need to become a full code editor before it becomes valuable.
+
+## What The TUI Must Become
+
+The TUI is the fast remote operator console.
+Its job is:
+
+- health
+- queue
+- unblock / retry
+- inspect active workers
+- intervene quickly while the VPS keeps running
+
+It should become better-looking and more functional, but it is still the ops
+face of Arc, not the flagship product surface.
 
 ## Reading Order
 
-1. `PRODUCT-SPLIT.md`
-2. `docs/cockpit/ARCHITECTURE.md`
-3. `docs/cockpit/FAST-TODO.md`
-4. `docs/cockpit/SELF-DRIVE.md`
+1. `VISION.md`
+2. `PRODUCT-SPLIT.md`
+3. `docs/cockpit/ARCHITECTURE.md`
+4. `docs/plans/2026-03-20-arc-v1-product-spec.md`
+5. `docs/cockpit/FAST-TODO.md`
+6. `docs/cockpit/SELF-DRIVE.md`
+7. `docs/cockpit/TODO.md`
 
-Useful VPS commands:
+## Useful Commands
+
+VPS operator commands:
 
 ```bash
 arc
+arc self-drive
 arc dashboard
 arc status
 arc do "Ship the next Arc feature"
@@ -52,33 +104,10 @@ openclaw code tui --repo /srv/arc/repo
 cd /srv/arc/repo && bash scripts/arc-self-drive/deploy.sh
 ```
 
-Useful Mac-side queue commands when `gateway.mode=remote` targets the VPS:
-
-```bash
-openclaw code task add "Ship the next Arc feature" --repo /srv/arc/repo --priority high --json
-openclaw code task list --json
-openclaw code review list --json
-openclaw code review status review_123 approved --json
-```
-
-If you do not want to switch your global CLI config yet, use the repo-local wrapper instead:
-
-```bash
-cd /Users/tessaro/openclaw/.worktrees/coding-cockpit
-bash scripts/arc-self-drive/mac-remote-code.sh task list --json
-bash scripts/arc-self-drive/mac-remote-code.sh review list --json
-```
-
-Persist Claude for unattended service use:
-
-```bash
-cd /srv/arc/repo
-export CLAUDE_CODE_OAUTH_TOKEN='...'
-bash scripts/arc-self-drive/install-engine-auth.sh
-```
-
-5. `docs/cockpit/TODO.md`
-6. `docs/plans/2026-03-19-elite-developer-cockpit-v1.md`
+On a Mac without `systemctl`, `arc` behaves as a thin SSH client to the VPS
+operator shell. `arc`, `arc dashboard`, `arc do`, `arc tasks`, `arc reviews`,
+`arc self-drive`, `arc daemon ...`, `arc status`, and `arc tick` all delegate
+to the VPS over `ssh`.
 
 ## Current Code Map
 
@@ -91,12 +120,12 @@ Backend orchestration:
 - `src/gateway/server-methods-list.ts`
 - `src/gateway/method-scopes.ts`
 
-CLI:
+CLI and TUI:
 
 - `src/cli/code-cli.ts`
 - `src/commands/code.ts`
-- `src/cli/program/register.subclis.ts`
-- `src/cli/program/subcli-descriptors.ts`
+- `src/code-cockpit/tui.ts`
+- `scripts/arc-self-drive/arc.sh`
 
 Native macOS shell:
 
@@ -104,54 +133,14 @@ Native macOS shell:
 - `apps/macos/Sources/OpenClaw/CockpitStore.swift`
 - `apps/macos/Sources/OpenClaw/CockpitWindow.swift`
 - `apps/macos/Sources/OpenClaw/GatewayConnection.swift`
-- `apps/macos/Sources/OpenClaw/MenuContentView.swift`
-
-Tests:
-
-- `src/code-cockpit/store.test.ts`
-- `src/code-cockpit/runtime.test.ts`
-- `src/code-cockpit/gateway-handlers.test.ts`
-- `src/cli/code-cli.test.ts`
-- `src/cli/code-cli.worker-gateway.test.ts`
-- `apps/macos/Tests/OpenClawIPCTests/CockpitWindowSmokeTests.swift`
-
-macOS build helper:
-
-- `scripts/use-xcode-developer-dir.sh`
-
-## Commands That Matter
-
-TypeScript verification:
-
-```bash
-pnpm exec vitest run --config vitest.unit.config.ts \
-  src/code-cockpit/store.test.ts \
-  src/code-cockpit/runtime.test.ts \
-  src/code-cockpit/gateway-handlers.test.ts \
-  src/cli/code-cli.test.ts \
-  src/cli/code-cli.worker-gateway.test.ts \
-  --maxWorkers=1
-```
-
-macOS smoke test:
-
-```bash
-source scripts/use-xcode-developer-dir.sh
-cd apps/macos
-swift test --filter CockpitWindowSmokeTests
-```
 
 ## Practical Meaning
 
 The system is now split correctly:
 
 - OpenClaw owns worker orchestration and durable state
-- the macOS app owns the future cockpit UX
-- the VPS checkout is the canonical async development runtime
-- the Mac CLI can queue and review remote work without SSHing into the VPS
-- the repo-local remote wrapper can drive the VPS queue without changing your global OpenClaw config
-- the VPS dashboard gives Arc a simple operator surface without replacing the desktop app direction
-- the Mac stays responsible for Swift/macOS verification
-
-The next work should make the native window useful, not broaden the backend
-without an operator surface.
+- the VPS is the canonical async execution body
+- the TUI is the remote ops console
+- the Swift app is the flagship Arc direction
+- the next work should make the app feel like a review workstation, not just
+  widen backend capability

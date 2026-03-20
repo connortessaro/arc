@@ -28,6 +28,7 @@ import {
   loadCodeCockpitStore,
   type CodeWorkerAuthHealth,
   type CodeWorkerEngineId,
+  type CodePullRequestState,
   type CodeReviewStatus,
   type CodeReviewRequest,
   type CodeResolvedReviewResult,
@@ -53,6 +54,8 @@ const ARC_SELF_DRIVE_COMMITTER_NAME = "Arc Self Drive";
 const ARC_SELF_DRIVE_COMMITTER_EMAIL = "arc-self-drive@local.invalid";
 const SELF_DRIVE_POLICY =
   "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
+const DEFAULT_GITHUB_REMOTE = "origin";
+const DEFAULT_GITHUB_BASE_BRANCH = "main";
 
 type WorkerEngineAdapter = {
   engineId: CodeWorkerEngineId;
@@ -65,6 +68,19 @@ type WorkerEngineHealth = {
   commandPath?: string;
   authHealth: CodeWorkerAuthHealth;
   healthy: boolean;
+};
+
+type GitHubDraftPrConfig = {
+  token: string;
+  remote: string;
+  baseBranch: string;
+};
+
+type DraftPullRequestMetadata = {
+  pushedBranch: string;
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+  pullRequestState: CodePullRequestState;
 };
 
 const WORKER_ENGINE_ADAPTERS: Record<CodeWorkerEngineId, WorkerEngineAdapter> = {
@@ -319,6 +335,14 @@ async function resolveBaseBranch(
   runCommand: typeof runCommandWithTimeout,
   repoRoot: string,
 ): Promise<string> {
+  // Allow the runtime host to pin a stable target branch instead of inheriting
+  // whatever branch happens to be checked out in the deployment checkout.
+  const configuredBaseBranch =
+    normalizeString(process.env.ARC_SELF_DRIVE_BASE_BRANCH) ??
+    (await readGitValue(runCommand, repoRoot, ["config", "--get", "arc.selfDriveBaseBranch"]));
+  if (configuredBaseBranch) {
+    return configuredBaseBranch;
+  }
   const remoteHead = await readGitValue(runCommand, repoRoot, [
     "symbolic-ref",
     "--quiet",
@@ -407,6 +431,174 @@ async function commitWorkerChanges(params: {
   }
 
   return await readGitValue(params.runCommand, params.worktreePath, ["rev-parse", "HEAD"]);
+}
+
+function resolveGitHubDraftPrConfig(): GitHubDraftPrConfig | null {
+  const token = normalizeString(process.env.ARC_SELF_DRIVE_GITHUB_TOKEN);
+  if (!token) {
+    return null;
+  }
+  return {
+    token,
+    remote: normalizeString(process.env.ARC_SELF_DRIVE_GITHUB_REMOTE) ?? DEFAULT_GITHUB_REMOTE,
+    baseBranch:
+      normalizeString(process.env.ARC_SELF_DRIVE_BASE_BRANCH) ?? DEFAULT_GITHUB_BASE_BRANCH,
+  };
+}
+
+function buildGitHubCommandEnv(config: GitHubDraftPrConfig): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GH_TOKEN: config.token,
+    GITHUB_TOKEN: config.token,
+  };
+}
+
+function parsePullRequestState(
+  rawState: string | undefined,
+  isDraft: boolean,
+): CodePullRequestState {
+  if (isDraft) {
+    return "draft";
+  }
+  switch ((rawState ?? "").trim().toUpperCase()) {
+    case "MERGED":
+      return "merged";
+    case "CLOSED":
+      return "closed";
+    default:
+      return "open";
+  }
+}
+
+async function readExistingDraftPullRequest(params: {
+  runCommand: typeof runCommandWithTimeout;
+  config: GitHubDraftPrConfig;
+  worktreePath: string;
+  branch: string;
+}): Promise<DraftPullRequestMetadata | null> {
+  const existing = await params
+    .runCommand(["gh", "pr", "view", params.branch, "--json", "number,url,state,isDraft"], {
+      timeoutMs: 30_000,
+      cwd: params.worktreePath,
+      env: buildGitHubCommandEnv(params.config),
+    })
+    .catch(() => null);
+  if (!existing || existing.code !== 0) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(existing.stdout) as {
+      number?: number;
+      url?: string;
+      state?: string;
+      isDraft?: boolean;
+    };
+    if (!payload.number || !normalizeString(payload.url)) {
+      return null;
+    }
+    return {
+      pushedBranch: params.branch,
+      pullRequestNumber: payload.number,
+      pullRequestUrl: payload.url!.trim(),
+      pullRequestState: parsePullRequestState(payload.state, Boolean(payload.isDraft)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function publishDraftPullRequest(params: {
+  runCommand: typeof runCommandWithTimeout;
+  worktreePath: string;
+  branch: string;
+  taskTitle: string;
+}): Promise<{ metadata: DraftPullRequestMetadata | null; error?: string }> {
+  const config = resolveGitHubDraftPrConfig();
+  if (!config) {
+    return { metadata: null };
+  }
+
+  // Query first so a resumed worker or repeated finalization does not open
+  // another draft PR for the same branch.
+  const existing = await readExistingDraftPullRequest({
+    runCommand: params.runCommand,
+    config,
+    worktreePath: params.worktreePath,
+    branch: params.branch,
+  });
+  if (existing) {
+    return { metadata: existing };
+  }
+
+  const gitPush = await params
+    .runCommand(
+      ["git", "-C", params.worktreePath, "push", config.remote, `HEAD:${params.branch}`],
+      {
+        timeoutMs: 60_000,
+        cwd: params.worktreePath,
+        env: buildGitHubCommandEnv(config),
+      },
+    )
+    .catch(() => null);
+  if (!gitPush || gitPush.code !== 0) {
+    return {
+      metadata: null,
+      error:
+        normalizeString(gitPush?.stderr) ?? normalizeString(gitPush?.stdout) ?? "git push failed",
+    };
+  }
+
+  const prTitle = `Arc: ${params.taskTitle.trim() || "complete task"}`;
+  const prBody =
+    "Automated draft PR created by Arc self-drive.\n\n" +
+    "This branch was pushed from an isolated worker worktree after the task completed successfully.";
+  const created = await params
+    .runCommand(
+      [
+        "gh",
+        "pr",
+        "create",
+        "--draft",
+        "--base",
+        config.baseBranch,
+        "--head",
+        params.branch,
+        "--title",
+        prTitle,
+        "--body",
+        prBody,
+      ],
+      {
+        timeoutMs: 60_000,
+        cwd: params.worktreePath,
+        env: buildGitHubCommandEnv(config),
+      },
+    )
+    .catch(() => null);
+  if (!created || created.code !== 0) {
+    return {
+      metadata: null,
+      error:
+        normalizeString(created?.stderr) ??
+        normalizeString(created?.stdout) ??
+        "draft PR creation failed",
+    };
+  }
+
+  const createdMetadata = await readExistingDraftPullRequest({
+    runCommand: params.runCommand,
+    config,
+    worktreePath: params.worktreePath,
+    branch: params.branch,
+  });
+  if (!createdMetadata) {
+    return {
+      metadata: null,
+      error: "draft PR created but metadata lookup failed",
+    };
+  }
+  return { metadata: createdMetadata };
 }
 
 async function branchExists(
@@ -868,6 +1060,7 @@ class CodeCockpitRuntime {
     preparedBackend: PreparedBackend;
     repoRoot: string;
     worktreePath: string;
+    branch: string;
     existingThreadId?: string;
     useResume: boolean;
     exit: RunExit;
@@ -928,6 +1121,18 @@ class CodeCockpitRuntime {
         worktreePath: params.worktreePath,
         taskTitle: params.taskTitle,
       });
+      const publishedPr =
+        lastCommitHash === null
+          ? { metadata: null as DraftPullRequestMetadata | null }
+          : await publishDraftPullRequest({
+              runCommand: this.runCommandWithTimeout,
+              worktreePath: params.worktreePath,
+              branch: params.branch,
+              taskTitle: params.taskTitle,
+            });
+      // Publishing the draft PR is outside the worker process itself, so a
+      // publish failure should surface as operator attention instead of
+      // pretending the entire task completed cleanly.
       await updateCodeRun(params.localRunId, {
         status: "succeeded",
         finishedAt,
@@ -940,7 +1145,7 @@ class CodeCockpitRuntime {
         stderrTail: stderrTail ?? null,
       });
       await updateCodeWorkerSession(params.workerId, {
-        status: "completed",
+        status: publishedPr.error ? "failed" : "completed",
         activeRunId: null,
         engineId: params.engine.engineId,
         engineModel: params.modelId,
@@ -949,10 +1154,18 @@ class CodeCockpitRuntime {
         lastAuthCheckedAt: finishedAt,
         threadId: threadId ?? null,
         lastCommitHash: lastCommitHash ?? null,
+        pushedBranch:
+          lastCommitHash === null ? null : (publishedPr.metadata?.pushedBranch ?? params.branch),
+        pullRequestNumber: publishedPr.metadata?.pullRequestNumber ?? null,
+        pullRequestUrl: publishedPr.metadata?.pullRequestUrl ?? null,
+        pullRequestState: publishedPr.metadata?.pullRequestState ?? null,
+        pullRequestError: publishedPr.error ?? null,
         lastExitedAt: finishedAt,
-        lastExitReason: "succeeded",
+        lastExitReason: publishedPr.error ? "draft-pr-failed" : "succeeded",
       });
-      await updateCodeTaskStatus(params.taskId, "done").catch(() => undefined);
+      await updateCodeTaskStatus(params.taskId, publishedPr.error ? "blocked" : "done").catch(
+        () => undefined,
+      );
       return;
     }
 
@@ -1136,6 +1349,7 @@ class CodeCockpitRuntime {
             preparedBackend,
             repoRoot,
             worktreePath: ensured.worktreePath,
+            branch: ensured.branch,
             existingThreadId: worker.threadId,
             useResume,
             exit,
@@ -1152,6 +1366,7 @@ class CodeCockpitRuntime {
             preparedBackend,
             repoRoot,
             worktreePath: ensured.worktreePath,
+            branch: ensured.branch,
             existingThreadId: worker.threadId,
             useResume,
             exit: {

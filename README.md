@@ -2,129 +2,138 @@
 
 # Arc
 
-### A personal coding cockpit for building anything with agentic AI.
+### A personal project cockpit for building software with persistent agent workers.
 
-`always-on` · `vps-first` · `claude-first` · `codex fallback` · `human taste stays in charge`
+`review-and-steer` · `always-on` · `vps-first runtime` · `swift flagship app` · `claude-first` · `codex fallback`
 
 </div>
 
 Arc is built around a simple belief:
 
-software creation should not collapse every time you close a terminal.
+the next step after today’s IDEs and AI coding tools is not more autocomplete,
+more chat panes, or a better one-off session.
 
-The system you actually want is one that can hold direction, keep work moving,
-route execution across the best available agents, and stay alive long enough to
-compound momentum.
+The next step is a system that can **keep software moving**.
 
-That is what Arc is for.
-
----
-
-## The Vision
-
-Arc is meant to feel less like “using an AI tool” and more like having a real
-cockpit for software creation.
-
-Not a chatbot.  
-Not a one-off coding session.  
-Not a glorified terminal wrapper.  
-Not a black box that replaces your judgment.
-
-Arc should let you:
-
-- decide what matters
-- express intent clearly
-- hand work off to persistent agent workers
-- keep multiple efforts moving over time
-- come back to outcomes, state, and follow-up instead of lost context
-
-The long-term promise is not just faster coding.
-
-It is sustained software momentum.
+Arc is meant to be that system.
 
 ---
 
-## What Arc Should Feel Like
+## The Leap
 
-The ideal Arc loop is:
+Current agent workflows usually die the same way:
 
-1. You define the direction.
-2. Arc turns that direction into organized execution.
-3. Claude and Codex carry the coding workload.
-4. Arc keeps running while you handle higher-leverage work.
-5. You return to a system that still remembers what happened.
-
-That is the core product idea:
-
-**a persistent operator system for building software, including itself.**
-
----
-
-## What Arc Believes
-
-| Principle                         | Meaning                                                                 |
-| --------------------------------- | ----------------------------------------------------------------------- |
-| The human keeps taste             | Arc should multiply judgment, not erase it.                             |
-| Sessions are not enough           | Great agent runs are useful, but durable state is more valuable.        |
-| The best engine should win        | Arc should orchestrate Claude and Codex, not try to replace them.       |
-| Async matters                     | The system should keep building while your attention is somewhere else. |
-| Notes and execution are different | Obsidian should hold thinking; Arc should hold live execution state.    |
-
----
-
-## Arc, OpenClaw, Claude, Codex, Obsidian
-
-Arc only makes sense if the layers stay clean.
-
-| Layer              | Role                                                              |
-| ------------------ | ----------------------------------------------------------------- |
-| **Arc**            | product, operator workflow, cockpit, queue and control experience |
-| **OpenClaw**       | modified runtime, gateway, worker lifecycle, durable state        |
-| **Claude + Codex** | external worker engines that do the coding work                   |
-| **Obsidian**       | planning, notes, specs, architecture, and project memory          |
-
-The intended workflow is:
-
-- think in Obsidian
-- decide in Arc
-- execute through Claude and Codex
-- keep OpenClaw underneath as the durable control plane
-
-Obsidian should be the brain.  
-Arc should be the hands.
-
----
-
-## Why This Exists
-
-The failure mode of current agent workflows is obvious:
-
-- a powerful session
+- a strong session
 - a burst of progress
 - a lot of context in your head
-- then the shell closes and the momentum dies
+- then the shell closes and the momentum disappears
 
 Arc exists to replace that with something stronger:
 
 - persistent backlog
-- durable runs
+- durable worker state
 - isolated worktrees
-- engine routing
 - asynchronous execution
-- visible blocked states
-- recoverable momentum
+- blocked queues and review queues
+- a cockpit you can return to instead of a terminal transcript
 
-Arc is not trying to out-model Claude or Codex.
+Arc should feel like a **workstation for software momentum**, not a prompt box
+with file access.
 
-It is trying to give them a better operating environment.
+## What Arc Is
 
----
+Arc is a **personal project cockpit**.
+
+It is designed for one human to:
+
+- operate multiple projects from one place
+- hand work to persistent Claude and Codex workers
+- review diffs, changed files, tests, and run summaries
+- unblock work when agents get stuck
+- keep moving across personal projects, work projects, and open source
+
+Arc is personal-first in v1, but it should already fit real collaborative
+software work through normal Git and GitHub workflows.
+
+## What Arc Is Not
+
+Arc is not:
+
+- a chatbot
+- a full editor-first IDE in v1
+- a terminal wrapper as the end state
+- a replacement model runtime
+- a shared multi-user cockpit in v1
+
+Arc should move the category forward by changing the center of gravity from
+editing and prompting to **persistent execution plus review and steering**.
+
+## The Product Shape
+
+Arc has one runtime with two important surfaces:
+
+### Swift macOS app
+
+The Swift app is the flagship Arc product.
+It should become the place where you actually spend time.
+
+Its job is:
+
+- global Arc home across projects
+- project workspaces
+- review queue
+- blocked / needs-input queue
+- changed files, diffs, tests, and summaries
+- worker detail and operator decisions
+
+Arc does not need to become a full code editor before it becomes valuable.
+Reading code and steering work matter more first.
+
+### VPS TUI
+
+The TUI is the remote operator console.
+It should be fast, attractive, and more functional than it is today, but it is
+still the ops face of Arc, not the whole product.
+
+Its job is:
+
+- queue work
+- inspect health
+- unblock failed tasks
+- watch active workers
+- intervene quickly while away from the app
+
+## The Layer Model
+
+Arc only makes sense if the layers stay clean.
+
+| Layer              | Role                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| **Arc**            | product, workflow, workstation, project cockpit              |
+| **OpenClaw**       | runtime, gateway, worktrees, worker lifecycle, durable state |
+| **Claude + Codex** | worker engines that do the coding work                       |
+| **Obsidian**       | planning, notes, specs, architecture, project memory         |
+
+Obsidian should hold thinking.  
+Arc should hold execution.
+
+## The Human Loop
+
+The human role in Arc is mostly to **review and steer**:
+
+1. Decide what matters.
+2. Queue or reshape work.
+3. Let Claude and Codex execute in isolated worktrees.
+4. Return to diffs, tests, summaries, and blocked items.
+5. Approve, redirect, retry, or reprioritize.
+
+That is the product loop.
 
 ## Current Reality
 
-As of `2026-03-19`, Arc is already a real system, not just a concept.
+As of `2026-03-20`, Arc is already a real system, not just a concept.
 
-What is true today:
+What exists today:
 
 - the canonical async runtime lives on a VPS at `/srv/arc/repo`
 - OpenClaw is running as the durable control plane under Arc
@@ -132,13 +141,26 @@ What is true today:
 - Claude is preferred first, with Codex fallback
 - workers run in isolated git worktrees on local branches
 - task, worker, run, and review state are persisted
-- the macOS shell is underway, but not yet the finished daily-driver cockpit
+- the Swift macOS shell exists, but is not yet the finished review workstation
+- the TUI exists as the remote operator surface, but still needs product polish
 
-So Arc is already real. It is just earlier than the final product shape.
+So Arc is already alive. The main work now is making the product surface worthy
+of the runtime.
 
----
+## Near-Term Product Priorities
 
-## The Repo Direction
+1. Review queue UI
+2. Blocked / needs-input queue
+3. Run summaries and review-ready artifacts
+4. Diff / test / log review lane
+5. Workspace persistence
+6. Better-looking, more functional TUI ops console
+7. Richer multi-project home
+
+The first unmistakable flagship milestone is a **review workstation**, not a
+full editor and not just a daemon dashboard.
+
+## Repo Direction
 
 This repository is being steered as Arc.
 
@@ -148,14 +170,13 @@ This repository is being steered as Arc.
 - that naming lag is an implementation detail, not the product identity
 
 OpenClaw still exists here, but not as the headline product.
-
 Arc is the thing being built.
-
----
 
 ## Read Next
 
+- [VISION.md](VISION.md)
 - [PRODUCT-SPLIT.md](PRODUCT-SPLIT.md)
 - [Arc Context](docs/cockpit/README.md)
-- [Arc Self-Drive](docs/cockpit/SELF-DRIVE.md)
 - [Arc Architecture](docs/cockpit/ARCHITECTURE.md)
+- [Arc Self-Drive](docs/cockpit/SELF-DRIVE.md)
+- [Arc V1 Product Spec](docs/plans/2026-03-20-arc-v1-product-spec.md)

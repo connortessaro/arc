@@ -1,110 +1,160 @@
-## OpenClaw Vision
+# Arc Vision
 
-OpenClaw is the AI that actually does things.
-It runs on your devices, in your channels, with your rules.
+Arc is the product being built in this repository.
+OpenClaw remains the runtime and control plane underneath it.
 
-This document explains the current state and direction of the project.
-We are still early, so iteration is fast.
-Project overview and developer docs: [`README.md`](README.md)
-Contribution guide: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+This document is the high-level product direction for Arc.
+It should stay stable enough to steer decisions, but practical enough to match
+the system that exists today.
 
-OpenClaw started as a personal playground to learn AI and build something genuinely useful:
-an assistant that can run real tasks on a real computer.
-It evolved through several names and shells: Warelay -> Clawdbot -> Moltbot -> OpenClaw.
+Project overview: [`README.md`](README.md)  
+Product/runtime split: [`PRODUCT-SPLIT.md`](PRODUCT-SPLIT.md)  
+Current cockpit direction: [`docs/cockpit/README.md`](docs/cockpit/README.md)
 
-The goal: a personal assistant that is easy to use, supports a wide range of platforms, and respects privacy and security.
+## The Core Bet
 
-The current focus is:
+The next step forward should not be “yet another code editor with AI.”
 
-Priority:
+The better direction is a **project cockpit**:
 
-- Security and safe defaults
-- Bug fixes and stability
-- Setup reliability and first-run UX
+- a system that keeps work moving after a terminal closes
+- a system that can hold multiple projects over time
+- a system that lets humans review, steer, and decide instead of micromanaging prompts
+- a system that uses the best available engines without pretending to replace them
 
-Next priorities:
+Arc should feel like a real workstation for software creation, not a chat box
+with file access.
 
-- Supporting all major model providers
-- Improving support for major messaging channels (and adding a few high-demand ones)
-- Performance and test infrastructure
-- Better computer-use and agent harness capabilities
-- Ergonomics across CLI and web frontend
-- Companion apps on macOS, iOS, Android, Windows, and Linux
+## What Arc Is
 
-Contribution rules:
+Arc is a **personal project cockpit** for building software with persistent
+agent workers.
 
-- One PR = one issue/topic. Do not bundle multiple unrelated fixes/features.
-- PRs over ~5,000 changed lines are reviewed only in exceptional circumstances.
-- Do not open large batches of tiny PRs at once; each PR has review cost.
-- For very small related fixes, grouping into one focused PR is encouraged.
+It should let one human:
 
-## Security
+- direct multiple projects from one home surface
+- hand work to background Claude and Codex workers
+- return to diffs, tests, summaries, and blocked decisions
+- keep momentum across open source work, client work, and personal projects
 
-Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
-The goal is to stay powerful for real work while making risky paths explicit and operator-controlled.
+Arc is personal-first in v1, but it must fit real collaborative software work:
+Git, GitHub, reviews, branches, worktrees, and open source contribution
+patterns.
 
-Canonical security policy and reporting:
+## What Arc Is Not
 
-- [`SECURITY.md`](SECURITY.md)
+Arc is not:
 
-We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
+- a replacement foundation model
+- a glorified prompt runner
+- a thin terminal wrapper as the end state
+- a full multi-user collaborative workspace in v1
+- a normal IDE with an AI sidebar bolted on
 
-## Plugins & Memory
+If Arc ever feels like “just another editor plus AI,” it has failed to move the
+category forward.
 
-OpenClaw has an extensive plugin API.
-Core stays lean; optional capability should usually ship as plugins.
+## The Product Shape
 
-Preferred plugin path is npm package distribution plus local extension loading for development.
-If you build a plugin, host and maintain it in your own repository.
-The bar for adding optional plugins to core is intentionally high.
-Plugin docs: [`docs/tools/plugin.md`](docs/tools/plugin.md)
-Community plugin listing + PR bar: https://docs.openclaw.ai/plugins/community
+Arc should have two product surfaces over one runtime:
 
-Memory is a special plugin slot where only one memory plugin can be active at a time.
-Today we ship multiple memory options; over time we plan to converge on one recommended default path.
+### Swift macOS app
 
-### Skills
+The Swift app is the flagship Arc product.
+It should become the place where you actually spend time.
 
-We still ship some bundled skills for baseline UX.
-New skills should be published to ClawHub first (`clawhub.ai`), not added to core by default.
-Core skill additions should be rare and require a strong product or security reason.
+Its job is:
 
-### MCP Support
+- project home
+- project workspace
+- review queue
+- blocked / needs-input queue
+- changed files and diffs
+- tests, summaries, and worker detail
 
-OpenClaw supports MCP through `mcporter`: https://github.com/steipete/mcporter
+It does not need to become a full editor before it becomes useful.
+Reading code, reviewing work, and steering agents matter more first.
 
-This keeps MCP integration flexible and decoupled from core runtime:
+### VPS TUI
 
-- add or change MCP servers without restarting the gateway
-- keep core tool/context surface lean
-- reduce MCP churn impact on core stability and security
+The TUI is the fast remote operator console.
+It should feel functional, intentional, and pleasant, but it is still the ops
+face of Arc, not the whole product.
 
-For now, we prefer this bridge model over building first-class MCP runtime into core.
-If there is an MCP server or feature `mcporter` does not support yet, please open an issue there.
+Its job is:
 
-### Setup
+- queue work
+- inspect health
+- unblock failed tasks
+- watch active workers
+- intervene quickly while away from the app
 
-OpenClaw is currently terminal-first by design.
-This keeps setup explicit: users see docs, auth, permissions, and security posture up front.
+## The Layer Model
 
-Long term, we want easier onboarding flows as hardening matures.
-We do not want convenience wrappers that hide critical security decisions from users.
+Arc only makes sense if the layers stay clean.
 
-### Why TypeScript?
+| Layer              | Role                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| **Arc**            | product, operator workflow, workstation, project cockpit     |
+| **OpenClaw**       | runtime, gateway, worktrees, worker lifecycle, durable state |
+| **Claude + Codex** | worker engines that do the coding work                       |
+| **Obsidian**       | planning, notes, specs, architecture, project memory         |
 
-OpenClaw is primarily an orchestration system: prompts, tools, protocols, and integrations.
-TypeScript was chosen to keep OpenClaw hackable by default.
-It is widely known, fast to iterate in, and easy to read, modify, and extend.
+Obsidian should hold thinking.  
+Arc should hold execution.
 
-## What We Will Not Merge (For Now)
+## The Human Role
 
-- New core skills when they can live on ClawHub
-- Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
-- Commercial service integrations that do not clearly fit the model-provider category
-- Wrapper channels around already supported channels without a clear capability or security gap
-- First-class MCP runtime in core when `mcporter` already provides the integration path
-- Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
-- Heavy orchestration layers that duplicate existing agent and tool infrastructure
+The human should mostly **review and steer**.
 
-This list is a roadmap guardrail, not a law of physics.
-Strong user demand and strong technical rationale can change it.
+That means Arc should optimize for:
+
+- seeing what changed
+- seeing what failed
+- seeing what needs a decision
+- reprioritizing work
+- nudging the system back on course
+
+Prompting still matters, but prompting is not the center of the product.
+
+## The First Flagship Milestone
+
+The first unmistakable Arc milestone is a **review workstation**.
+
+That means the app becomes good enough to:
+
+- inspect diffs and changed files
+- inspect test and log output
+- understand worker summaries
+- resolve blocked items
+- keep project context between launches
+
+This matters more than:
+
+- turning the app into a full editor
+- building broad team collaboration
+- making the TUI the whole product
+
+## Guardrails
+
+To preserve the shape of Arc:
+
+- keep Arc personal-first in v1
+- keep collaboration Git-native, not live-shared-state-first
+- keep OpenClaw as the runtime owner
+- keep Claude and Codex as the coding engines
+- keep worktree isolation and no auto-push / no auto-merge safety rails
+- keep the TUI useful, but do not let it become the entire product direction
+
+## Near-Term Product Priorities
+
+1. Review queue UI
+2. Blocked / needs-input queue
+3. Run summaries and review-ready artifacts
+4. Diff / test / log review lane
+5. Workspace persistence
+6. Better-looking, more functional TUI ops console
+7. Richer global project home
+
+That sequence should hold unless a concrete runtime blocker forces a temporary
+detour.
