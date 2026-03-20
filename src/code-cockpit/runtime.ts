@@ -274,6 +274,14 @@ function resolveTaskPreferredEngine(task: CodeTask): CodeWorkerEngineId | null {
   return null;
 }
 
+function resolveStrictSelfDriveEngine(): CodeWorkerEngineId | null {
+  const configured = normalizeString(process.env.ARC_SELF_DRIVE_STRICT_ENGINE)?.toLowerCase();
+  if (configured === "claude" || configured === "codex") {
+    return configured;
+  }
+  return null;
+}
+
 function parseTimestampMs(value?: string): number | null {
   if (!value) {
     return null;
@@ -994,6 +1002,23 @@ class CodeCockpitRuntime {
         .map((engine) => engine.engineId)
         .filter((engineId) => this.isEngineCoolingDown(store, engineId)),
     );
+    const strictEngine = resolveStrictSelfDriveEngine();
+    if (strictEngine) {
+      const strictHealth = healthByEngine[strictEngine];
+      if (strictHealth?.healthy && !coolingDownEngines.has(strictEngine)) {
+        return { selected: strictHealth, reason: null as string | null };
+      }
+      if (coolingDownEngines.has(strictEngine)) {
+        return {
+          selected: null,
+          reason: `strict-engine-cooling-down:${strictEngine}`,
+        };
+      }
+      return {
+        selected: null,
+        reason: `strict-engine-unhealthy:${strictEngine}`,
+      };
+    }
     const preferredEngine = resolveTaskPreferredEngine(task);
     if (preferredEngine) {
       const preferred = healthByEngine[preferredEngine];

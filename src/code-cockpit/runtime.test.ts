@@ -1281,6 +1281,53 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
   });
 
+  it("blocks self-drive when a strict Claude engine is configured and Claude is unavailable", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
+      "# Fast TODO\n\n- [ ] Review the remote auth loop\n",
+      "utf8",
+    );
+
+    vi.stubEnv("ARC_SELF_DRIVE_STRICT_ENGINE", "claude");
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: false,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result).toMatchObject({
+      action: "noop",
+      reason: "strict-engine-unhealthy:claude",
+      task: {
+        title: "Review the remote auth loop",
+        status: "blocked",
+      },
+    });
+    expect(pendingRuns).toHaveLength(0);
+  });
+
   it("falls back to Codex when Claude recently failed with a usage-limit style auth error", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 

@@ -121,12 +121,14 @@ Install notes:
 - the systemd units now read `~/.config/arc-self-drive/engine.env` if it exists
 - `healthcheck.sh` reports whether that env file exists, so unattended auth drift is visible
 - add `[engine:claude]` or `[engine:codex]` to a task title/goal/notes when a task must use one engine
+- set `ARC_SELF_DRIVE_STRICT_ENGINE=claude` in `~/.config/arc-self-drive/engine.env` when the queue must never fall back to Codex
 - if Claude hits a usage-limit or rate-limit style failure, self-drive cools it down for six hours and lets Codex carry the queue
 
 ## Current Policy
 
 - one worker per supervisor tick
 - default engine order is Claude first, then Codex as fallback when Claude is unavailable or cooling down after a usage-limit failure
+- `ARC_SELF_DRIVE_STRICT_ENGINE=claude` or `codex` disables fallback entirely and overrides per-task engine hints until the selected engine is healthy again
 - Claude becomes fully unattended only after its token is persisted into the service env file
 - draft PR publishing becomes fully unattended only after `gh` and `ARC_SELF_DRIVE_GITHUB_TOKEN` are installed through `install-github-auth.sh`
 - task source order is explicit queue first, then unchecked items in `docs/cockpit/FAST-TODO.md`

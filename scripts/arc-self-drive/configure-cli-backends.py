@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 
+CLAUDE_SELF_DRIVE_NO_OUTPUT_TIMEOUT_MS = 29 * 60 * 1000
+
 
 def resolve_state_dir() -> Path:
     return Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw"))).expanduser()
@@ -74,6 +76,11 @@ def main() -> None:
         "--resume",
         "{sessionId}",
     ]
+    claude_reliability = claude.setdefault("reliability", {})
+    claude_watchdog = claude_reliability.setdefault("watchdog", {})
+    for profile in ("fresh", "resume"):
+        claude_profile = claude_watchdog.setdefault(profile, {})
+        claude_profile["noOutputTimeoutMs"] = CLAUDE_SELF_DRIVE_NO_OUTPUT_TIMEOUT_MS
 
     config_path.write_text(f"{json.dumps(config, indent=2)}\n")
     print(str(config_path))
