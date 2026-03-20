@@ -56,59 +56,36 @@ resolve_upstream() {
   printf 'origin/%s\n' "$branch"
 }
 
-resolve_root_package_version() {
+resolve_root_package_dir() {
   local package_name="$1"
-  local package_range
-  package_range="$(
-    node - "$ROOT_DIR/package.json" "$package_name" <<'JS'
-const fs = require("fs");
-
-const [packageJsonPath, packageName] = process.argv.slice(2);
-const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-for (const section of [
-  "dependencies",
-  "devDependencies",
-  "optionalDependencies",
-  "peerDependencies",
-]) {
-  const value = packageJson[section]?.[packageName];
-  if (typeof value === "string" && value.length > 0) {
-    process.stdout.write(value);
-    process.exit(0);
-  }
-}
-JS
-  )"
-
-  [[ -n "$package_range" ]] || return 0
-
-  npm view "${package_name}@${package_range}" version --json 2>/dev/null | \
-    python3 <<'PY'
-import json
-
-try:
-    payload = json.load(sys.stdin)
-except Exception:
-    print("")
-    raise SystemExit(0)
-
-if isinstance(payload, list):
-    print(payload[-1] if payload else "")
-else:
-    print(payload or "")
-PY
+  pnpm --dir "$ROOT_DIR" ls "$package_name" --depth -1 --json --filter . 2>/dev/null | \
+    node -e '
+      const packageName = process.argv[1];
+      let input = "";
+      process.stdin.on("data", (chunk) => (input += chunk));
+      process.stdin.on("end", () => {
+        try {
+          const payload = JSON.parse(input);
+          const entry = Array.isArray(payload) ? payload[0] : null;
+          const path = entry?.dependencies?.[packageName]?.path ?? "";
+          process.stdout.write(path);
+        } catch {
+          process.stdout.write("");
+        }
+      });
+    ' "$package_name"
 }
 
 repair_registry_package() {
   local package_name="$1"
   local encoded_name="${package_name//\//+}"
-  local preferred_package_dir="" preferred_package_version=""
+  local preferred_package_dir="" preferred_package_path=""
   local package_matches
   package_matches="$(find "$ROOT_DIR/node_modules/.pnpm" -maxdepth 1 -type d -name "${encoded_name}@*" | sort || true)"
 
   [[ -n "$package_matches" ]] || return 0
 
-  preferred_package_version="$(resolve_root_package_version "$package_name")"
+  preferred_package_path="$(resolve_root_package_dir "$package_name")"
 
   while IFS= read -r package_dir; do
     [[ -n "$package_dir" ]] || continue
@@ -117,7 +94,7 @@ repair_registry_package() {
     package_suffix="${package_base#${encoded_name}@}"
     package_version="${package_suffix%%_*}"
 
-    if [[ -n "$preferred_package_version" && "$package_version" == "$preferred_package_version" ]]; then
+    if [[ -n "$preferred_package_path" && "$preferred_package_path" == "$package_dir/node_modules/$package_name" ]]; then
       preferred_package_dir="$package_dir"
     fi
 
