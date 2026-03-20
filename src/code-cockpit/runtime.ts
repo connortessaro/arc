@@ -48,7 +48,6 @@ const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
 const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
-const PENDING_REVIEW_CAP = 3;
 const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
 const SELF_DRIVE_POLICY =
   "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
@@ -512,23 +511,6 @@ class CodeCockpitRuntime {
       .catch(() => {});
   }
 
-  private async ensurePendingReview(taskId: string, workerId: string, workerName: string) {
-    const store = await loadCodeCockpitStore();
-    const existing = store.reviews.find(
-      (entry) =>
-        entry.taskId === taskId && entry.workerId === workerId && entry.status === "pending",
-    );
-    if (existing) {
-      return existing;
-    }
-    return await createCodeReviewRequest({
-      taskId,
-      workerId,
-      title: `Review ${workerName}`,
-      summary: "Worker run completed and is ready for review.",
-    });
-  }
-
   private async bootstrapFastTodoTask(repoRoot: string): Promise<CodeTask | null> {
     let markdown: string;
     try {
@@ -573,7 +555,7 @@ class CodeCockpitRuntime {
     const pickTask = (store: Awaited<ReturnType<typeof loadCodeCockpitStore>>) =>
       [...store.tasks]
         .filter((task) => taskMatchesRepo(task, params.repoRoot))
-        .filter((task) => !["done", "cancelled", "review"].includes(task.status))
+        .filter((task) => !["done", "cancelled", "review", "blocked"].includes(task.status))
         .toSorted((left, right) => {
           const priorityDelta =
             (TASK_PRIORITY_ORDER[left.priority] ?? TASK_PRIORITY_ORDER.normal) -
@@ -589,7 +571,7 @@ class CodeCockpitRuntime {
         Boolean(
           task &&
           taskMatchesRepo(task, params.repoRoot) &&
-          !["done", "cancelled", "review"].includes(task.status),
+          !["done", "cancelled", "review", "blocked"].includes(task.status),
         );
       const queuedWorker = [...store.workers]
         .filter((worker) => worker.status === "queued")
@@ -641,19 +623,6 @@ class CodeCockpitRuntime {
     }
     const refreshedStore = await loadCodeCockpitStore();
     return pickFromStore(refreshedStore);
-  }
-
-  private countPendingReviews(
-    store: Awaited<ReturnType<typeof loadCodeCockpitStore>>,
-    repoRoot?: string,
-  ) {
-    return store.reviews.filter((review) => {
-      if (review.status !== "pending") {
-        return false;
-      }
-      const task = store.tasks.find((entry) => entry.id === review.taskId);
-      return Boolean(task && taskMatchesRepo(task, repoRoot));
-    }).length;
   }
 
   private taskShouldBeInReview(
@@ -819,7 +788,6 @@ class CodeCockpitRuntime {
   private async finalizeWorkerRun(params: {
     workerId: string;
     taskId: string;
-    workerName: string;
     localRunId: string;
     engine: WorkerEngineAdapter;
     modelId: string;
@@ -890,7 +858,7 @@ class CodeCockpitRuntime {
         stderrTail: stderrTail ?? null,
       });
       await updateCodeWorkerSession(params.workerId, {
-        status: "awaiting_review",
+        status: "completed",
         activeRunId: null,
         engineId: params.engine.engineId,
         engineModel: params.modelId,
@@ -901,8 +869,7 @@ class CodeCockpitRuntime {
         lastExitedAt: finishedAt,
         lastExitReason: "succeeded",
       });
-      await updateCodeTaskStatus(params.taskId, "review").catch(() => undefined);
-      await this.ensurePendingReview(params.taskId, params.workerId, params.workerName);
+      await updateCodeTaskStatus(params.taskId, "done").catch(() => undefined);
       return;
     }
 
@@ -936,6 +903,7 @@ class CodeCockpitRuntime {
       lastExitedAt: finishedAt,
       lastExitReason: failureReason,
     });
+    await updateCodeTaskStatus(params.taskId, "blocked").catch(() => undefined);
   }
 
   private async launchWorkerTurn(params: StartCodeWorkerInput) {
@@ -1078,7 +1046,6 @@ class CodeCockpitRuntime {
           await this.finalizeWorkerRun({
             workerId: worker.id,
             taskId: task.id,
-            workerName: worker.name,
             localRunId: queuedRun.id,
             engine,
             modelId,
@@ -1092,7 +1059,6 @@ class CodeCockpitRuntime {
           await this.finalizeWorkerRun({
             workerId: worker.id,
             taskId: task.id,
-            workerName: worker.name,
             localRunId: queuedRun.id,
             engine,
             modelId,
@@ -1324,10 +1290,6 @@ class CodeCockpitRuntime {
   async supervisorTick(params: CodeSupervisorTickInput = {}): Promise<CodeSupervisorTickResult> {
     await this.ensureInitialized();
     const repoRoot = normalizeString(params.repoRoot);
-    const store = await loadCodeCockpitStore();
-    if (this.countPendingReviews(store, repoRoot) >= PENDING_REVIEW_CAP) {
-      return { action: "noop", reason: "pending-review-cap" };
-    }
     const candidate = await this.findSupervisorCandidate({ repoRoot });
     if (!candidate) {
       return { action: "noop", reason: "no-eligible-work" };

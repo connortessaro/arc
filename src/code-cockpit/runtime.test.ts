@@ -260,7 +260,7 @@ afterEach(async () => {
 });
 
 describe("code cockpit runtime", () => {
-  it("starts a worker in an auto-created worktree and moves it to awaiting_review on clean exit", async () => {
+  it("starts a worker in an auto-created worktree and marks it done on clean exit", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
     const task = await store.createCodeTask({
@@ -321,7 +321,7 @@ describe("code cockpit runtime", () => {
         nextStore.workers.some(
           (entry) =>
             entry.id === worker.id &&
-            entry.status === "awaiting_review" &&
+            entry.status === "completed" &&
             entry.threadId === "thread-123" &&
             !entry.activeRunId,
         ),
@@ -329,17 +329,17 @@ describe("code cockpit runtime", () => {
     const nextWorker = refreshed.workers.find((entry) => entry.id === worker.id);
     const nextTask = refreshed.tasks.find((entry) => entry.id === task.id);
     expect(nextWorker).toMatchObject({
-      status: "awaiting_review",
+      status: "completed",
       threadId: "thread-123",
       lastExitReason: "succeeded",
     });
     expect(nextTask).toMatchObject({
-      status: "review",
+      status: "done",
     });
     expect(nextWorker?.activeRunId).toBeUndefined();
     expect(
       refreshed.reviews.some((entry) => entry.workerId === worker.id && entry.status === "pending"),
-    ).toBe(true);
+    ).toBe(false);
     expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
       status: "succeeded",
       supervisorRunId: pendingRuns[0]?.runId,
@@ -411,12 +411,75 @@ describe("code cockpit runtime", () => {
         nextStore.runs.some((entry) => entry.id === started.run.id && entry.status === "succeeded"),
     );
     expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
-      status: "awaiting_review",
+      status: "completed",
       threadId: "thread-existing",
     });
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "done",
+    });
+    expect(refreshed.reviews).toHaveLength(0);
     expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
       status: "succeeded",
       threadId: "thread-existing",
+    });
+  });
+
+  it("marks failed unattended runs as blocked instead of retrying them automatically", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    const task = await store.createCodeTask({
+      title: "Handle a failing Arc task",
+      repoRoot: tempRepoRoot,
+      goal: "Surface the failure for intervention",
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "Failing worker",
+      objective: "Break in a visible way",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+    });
+
+    const started = await runtime.startWorker({ workerId: worker.id });
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 1,
+      exitSignal: null,
+      durationMs: 40,
+      stdout: "",
+      stderr: "boom",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) => entry.id === worker.id && entry.status === "failed" && !entry.activeRunId,
+        ) && nextStore.tasks.some((entry) => entry.id === task.id && entry.status === "blocked"),
+    );
+
+    expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      status: "failed",
+      lastExitReason: "failed",
+    });
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "blocked",
+    });
+    expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
+      status: "failed",
+      terminationReason: "failed",
     });
   });
 
@@ -497,12 +560,13 @@ describe("code cockpit runtime", () => {
         nextStore.workers.some(
           (entry) =>
             entry.id === worker.id &&
-            entry.status === "awaiting_review" &&
+            entry.status === "completed" &&
             entry.threadId === "claude-session-123" &&
             entry.authHealth === "healthy",
         ),
     );
     expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      status: "completed",
       engineId: "claude",
       engineModel: "claude-sonnet-4-6",
       backendId: "claude-cli",
@@ -510,6 +574,10 @@ describe("code cockpit runtime", () => {
       threadId: "claude-session-123",
       authHealth: "healthy",
     });
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "done",
+    });
+    expect(refreshed.reviews).toHaveLength(0);
   });
 
   it("pauses a running worker through the supervisor and requires explicit resume after reconciliation", async () => {
@@ -967,7 +1035,7 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
   });
 
-  it("pauses self-drive when the pending review cap is reached", async () => {
+  it("keeps self-drive moving even when pending reviews exist", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
     for (const title of ["Review item one", "Review item two", "Review item three"]) {
@@ -988,6 +1056,11 @@ describe("code cockpit runtime", () => {
         title: `Review ${title}`,
       });
     }
+    const queuedTask = await store.createCodeTask({
+      title: "Keep building Arc",
+      repoRoot: tempRepoRoot,
+      priority: "urgent",
+    });
 
     const runtime = createCodeCockpitRuntime({
       getProcessSupervisor: () => supervisor,
@@ -1014,10 +1087,13 @@ describe("code cockpit runtime", () => {
     const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
 
     expect(result).toMatchObject({
-      action: "noop",
-      reason: "pending-review-cap",
+      action: "started",
+      task: expect.objectContaining({
+        id: queuedTask.id,
+        title: "Keep building Arc",
+      }),
     });
-    expect(pendingRuns).toHaveLength(0);
+    expect(pendingRuns).toHaveLength(1);
   });
 
   it("prefers explicitly queued tasks before bootstrapping FAST-TODO work", async () => {

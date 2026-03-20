@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { runCodeCockpitTui } from "../code-cockpit/tui.js";
 import {
   codeDecisionAddCommand,
   codeDecisionListCommand,
@@ -62,6 +63,21 @@ export function registerCodeCli(program: Command) {
       await runCodeCommand(async () => {
         await codeSummaryCommand({ json: false }, defaultRuntime);
       });
+    });
+
+  code
+    .command("tui")
+    .description("Open the Arc operator dashboard")
+    .option("--repo <path>", "Repository root to manage")
+    .action(async (opts) => {
+      try {
+        await runCodeCockpitTui({
+          repoRoot: typeof opts.repo === "string" ? opts.repo.trim() || undefined : undefined,
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   code

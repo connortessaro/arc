@@ -20,7 +20,8 @@ print_usage() {
 Arc operator commands
 
 Usage:
-  arc                       Show status and available commands
+  arc                       Open the Arc dashboard TUI
+  arc dashboard             Open the Arc dashboard TUI
   arc status                Show gateway, engine, and queue status
   arc do "<goal>"           Queue a new task for ${DEFAULT_REPO_ROOT}
   arc tasks [args...]       List tasks through the live gateway
@@ -33,6 +34,10 @@ Usage:
   arc doctor                Show health plus command paths
   arc help                  Show this help
 EOF
+}
+
+run_dashboard() {
+  run_code tui --repo "${DEFAULT_REPO_ROOT}" "$@"
 }
 
 show_status() {
@@ -86,18 +91,26 @@ resolve_review_action() {
   esac
 }
 
-command_name="${1:-status}"
+command_name="${1:-dashboard}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
 
 case "$command_name" in
-  ""|status)
-    show_status
-    if [[ "${command_name}" != "status" ]]; then
+  "")
+    if [[ -t 0 && -t 1 ]]; then
+      run_dashboard "$@"
+    else
+      show_status
       echo "---"
       print_usage
     fi
+    ;;
+  dashboard)
+    run_dashboard "$@"
+    ;;
+  status)
+    show_status
     ;;
   help|-h|--help)
     print_usage

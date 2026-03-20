@@ -1,0 +1,647 @@
+import path from "node:path";
+import {
+  Container,
+  Input,
+  Key,
+  matchesKey,
+  ProcessTerminal,
+  Text,
+  TUI,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+  type Component,
+} from "@mariozechner/pi-tui";
+import { loadConfig } from "../config/config.js";
+import { callGateway } from "../gateway/call.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { theme } from "../tui/theme/theme.js";
+import { stopTuiSafely } from "../tui/tui.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import type {
+  CodeCockpitWorkspaceSummary,
+  CodeReviewRequest,
+  CodeTask,
+  CodeTaskStatus,
+} from "./store.js";
+
+type CodeCockpitTuiOptions = {
+  repoRoot?: string;
+};
+
+type TaskListPayload = {
+  storePath: string;
+  tasks: CodeTask[];
+};
+
+type ReviewListPayload = {
+  storePath: string;
+  reviews: CodeReviewRequest[];
+};
+
+type HealthcheckPayload = {
+  gateway?: {
+    status?: string;
+    port?: string;
+    health?: unknown;
+  };
+  engines?: Record<string, { health?: string }>;
+};
+
+type AttentionItem =
+  | { kind: "review"; id: string; review: CodeReviewRequest }
+  | { kind: "blocked"; id: string; task: CodeTask };
+
+type DashboardSnapshot = {
+  repoRoot: string;
+  summary: CodeCockpitWorkspaceSummary;
+  tasks: CodeTask[];
+  reviews: CodeReviewRequest[];
+  activeTasks: CodeTask[];
+  attentionItems: AttentionItem[];
+  health: HealthcheckPayload | null;
+};
+
+type DashboardPane = "tasks" | "attention";
+
+type DashboardActions = {
+  onRefresh: () => void;
+  onNewTask: () => void;
+  onResolveReview: (status: "approved" | "changes_requested" | "dismissed") => void;
+  onQuit: () => void;
+};
+
+function padAnsi(text: string, width: number): string {
+  const truncated = truncateToWidth(text, width);
+  const missing = Math.max(0, width - visibleWidth(truncated));
+  return `${truncated}${" ".repeat(missing)}`;
+}
+
+function renderColumn(lines: string[], width: number): string[] {
+  if (width <= 0) {
+    return [];
+  }
+  return lines.map((line) => padAnsi(line, width));
+}
+
+function shortStatusLabel(status: CodeTaskStatus): string {
+  return status.replaceAll("_", " ");
+}
+
+function taskGoal(task: CodeTask): string | undefined {
+  return task.goal?.trim() || task.notes?.trim() || undefined;
+}
+
+function renderWrappedBullet(text: string, width: number, indent = "  "): string[] {
+  const contentWidth = Math.max(8, width - indent.length);
+  const wrapped = wrapTextWithAnsi(text, contentWidth);
+  return wrapped.map((line, index) => `${index === 0 ? indent : `${indent} `}${line}`);
+}
+
+class ArcDashboardView implements Component {
+  private snapshot: DashboardSnapshot | null = null;
+  private statusMessage = "Loading Arc dashboard…";
+  private selectedPane: DashboardPane = "tasks";
+  private selectedTaskId: string | null = null;
+  private selectedAttentionId: string | null = null;
+
+  constructor(private readonly actions: DashboardActions) {}
+
+  setSnapshot(snapshot: DashboardSnapshot) {
+    this.snapshot = snapshot;
+    const fallbackTaskId = snapshot.activeTasks[0]?.id ?? null;
+    if (!snapshot.activeTasks.some((task) => task.id === this.selectedTaskId)) {
+      this.selectedTaskId = fallbackTaskId;
+    }
+    const fallbackAttentionId = snapshot.attentionItems[0]?.id ?? null;
+    if (!snapshot.attentionItems.some((item) => item.id === this.selectedAttentionId)) {
+      this.selectedAttentionId = fallbackAttentionId;
+    }
+    if (this.selectedPane === "tasks" && !this.selectedTaskId && this.selectedAttentionId) {
+      this.selectedPane = "attention";
+    }
+    if (this.selectedPane === "attention" && !this.selectedAttentionId && this.selectedTaskId) {
+      this.selectedPane = "tasks";
+    }
+  }
+
+  setStatusMessage(message: string) {
+    this.statusMessage = message.trim() || "Ready.";
+  }
+
+  invalidate() {}
+
+  handleInput(data: string) {
+    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right) || matchesKey(data, Key.left)) {
+      this.togglePane();
+      return;
+    }
+    if (matchesKey(data, Key.up)) {
+      this.moveSelection(-1);
+      return;
+    }
+    if (matchesKey(data, Key.down)) {
+      this.moveSelection(1);
+      return;
+    }
+    const lowered = data.toLowerCase();
+    if (lowered === "r") {
+      this.actions.onRefresh();
+      return;
+    }
+    if (lowered === "n") {
+      this.actions.onNewTask();
+      return;
+    }
+    if (lowered === "a") {
+      this.actions.onResolveReview("approved");
+      return;
+    }
+    if (lowered === "c") {
+      this.actions.onResolveReview("changes_requested");
+      return;
+    }
+    if (lowered === "x") {
+      this.actions.onResolveReview("dismissed");
+      return;
+    }
+    if (lowered === "q" || matchesKey(data, Key.ctrl("c"))) {
+      this.actions.onQuit();
+    }
+  }
+
+  render(width: number): string[] {
+    if (!this.snapshot) {
+      return [theme.dim("Loading Arc dashboard…")];
+    }
+
+    const lines: string[] = [];
+    lines.push(...this.renderHeader(width), "");
+
+    const columnGap = 3;
+    const leftWidth = Math.max(24, Math.floor((width - columnGap) / 2));
+    const rightWidth = Math.max(24, width - leftWidth - columnGap);
+    const leftLines = renderColumn(this.renderTasksPane(leftWidth), leftWidth);
+    const rightLines = renderColumn(this.renderAttentionPane(rightWidth), rightWidth);
+    const rowCount = Math.max(leftLines.length, rightLines.length);
+    for (let index = 0; index < rowCount; index += 1) {
+      const left = leftLines[index] ?? " ".repeat(leftWidth);
+      const right = rightLines[index] ?? " ".repeat(rightWidth);
+      lines.push(`${left}${" ".repeat(columnGap)}${right}`);
+    }
+
+    lines.push("", ...this.renderDetails(width), "", theme.dim(this.statusMessage));
+    return lines;
+  }
+
+  getSelectedReviewId(): string | null {
+    const item =
+      this.selectedPane === "attention"
+        ? this.snapshot?.attentionItems.find((entry) => entry.id === this.selectedAttentionId)
+        : null;
+    if (!item || item.kind !== "review") {
+      return null;
+    }
+    return item.review.id;
+  }
+
+  private renderHeader(width: number): string[] {
+    const { summary, health, repoRoot, activeTasks, attentionItems } = this.snapshot!;
+    const gatewayStatus = health?.gateway?.status ?? "unknown";
+    const claudeHealth = health?.engines?.claude?.health ?? "unknown";
+    const codexHealth = health?.engines?.codex?.health ?? "unknown";
+    const activeWorker = summary.activeLanes.find((lane) => lane.status === "running");
+    const topLine = theme.header(`Arc dashboard · ${shortenHomePath(repoRoot)}`);
+    const stats = [
+      `gateway ${gatewayStatus}`,
+      `claude ${claudeHealth}`,
+      `codex ${codexHealth}`,
+      `active ${activeTasks.length}`,
+      `attention ${attentionItems.length}`,
+      `runs ${summary.totals.runs}`,
+      activeWorker ? `worker ${activeWorker.workerName}` : "worker idle",
+    ].join(" | ");
+    return [truncateToWidth(topLine, width), theme.dim(truncateToWidth(stats, width))];
+  }
+
+  private renderTasksPane(width: number): string[] {
+    const title =
+      this.selectedPane === "tasks" ? theme.bold(theme.accent("Tasks")) : theme.bold("Tasks");
+    const lines = [title];
+    const { activeTasks } = this.snapshot!;
+    if (activeTasks.length === 0) {
+      lines.push(theme.dim("  No active tasks."));
+      return lines;
+    }
+    for (const task of activeTasks.slice(0, 8)) {
+      const selected = task.id === this.selectedTaskId && this.selectedPane === "tasks";
+      const prefix = selected ? theme.accent("›") : theme.dim("·");
+      const label = `${prefix} [${shortStatusLabel(task.status)}] ${task.title}`;
+      lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
+      const secondary = taskGoal(task);
+      if (secondary) {
+        lines.push(...renderWrappedBullet(theme.dim(secondary), width));
+      }
+    }
+    return lines;
+  }
+
+  private renderAttentionPane(width: number): string[] {
+    const title =
+      this.selectedPane === "attention"
+        ? theme.bold(theme.accent("Attention"))
+        : theme.bold("Attention");
+    const lines = [title];
+    const { attentionItems } = this.snapshot!;
+    if (attentionItems.length === 0) {
+      lines.push(theme.dim("  No pending reviews or blocked tasks."));
+      return lines;
+    }
+    for (const item of attentionItems.slice(0, 8)) {
+      const selected = item.id === this.selectedAttentionId && this.selectedPane === "attention";
+      const prefix = selected ? theme.accent("›") : theme.dim("·");
+      if (item.kind === "review") {
+        const label = `${prefix} [review] ${item.review.title}`;
+        lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
+        lines.push(
+          ...renderWrappedBullet(
+            theme.dim(
+              `task ${item.review.taskId} · ${item.review.summary ?? "waiting on human input"}`,
+            ),
+            width,
+          ),
+        );
+        continue;
+      }
+      const label = `${prefix} [blocked] ${item.task.title}`;
+      lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
+      lines.push(
+        ...renderWrappedBullet(theme.dim(taskGoal(item.task) ?? "needs intervention"), width),
+      );
+    }
+    return lines;
+  }
+
+  private renderDetails(width: number): string[] {
+    const lines = [theme.bold("Detail")];
+    const selectedTask =
+      this.selectedPane === "tasks"
+        ? (this.snapshot!.activeTasks.find((task) => task.id === this.selectedTaskId) ?? null)
+        : null;
+    const selectedAttention =
+      this.selectedPane === "attention"
+        ? (this.snapshot!.attentionItems.find((item) => item.id === this.selectedAttentionId) ??
+          null)
+        : null;
+
+    if (selectedTask) {
+      lines.push(
+        truncateToWidth(
+          `${selectedTask.title} · ${shortStatusLabel(selectedTask.status)} · ${selectedTask.priority}`,
+          width,
+        ),
+      );
+      lines.push(
+        ...renderWrappedBullet(taskGoal(selectedTask) ?? "No goal or notes attached.", width),
+      );
+    } else if (selectedAttention?.kind === "review") {
+      lines.push(
+        truncateToWidth(
+          `${selectedAttention.review.title} · pending review · task ${selectedAttention.review.taskId}`,
+          width,
+        ),
+      );
+      lines.push(
+        ...renderWrappedBullet(
+          selectedAttention.review.summary ??
+            selectedAttention.review.notes ??
+            "Resolve this review to unblock follow-up work.",
+          width,
+        ),
+      );
+    } else if (selectedAttention?.kind === "blocked") {
+      lines.push(truncateToWidth(`${selectedAttention.task.title} · blocked`, width));
+      lines.push(
+        ...renderWrappedBullet(
+          taskGoal(selectedAttention.task) ?? "This task is blocked and needs operator input.",
+          width,
+        ),
+      );
+    } else {
+      lines.push(theme.dim("Select a task or attention item."));
+    }
+
+    lines.push("", theme.bold("Recent runs"));
+    const recentRuns = this.snapshot!.summary.recentRuns.slice(0, 3);
+    if (recentRuns.length === 0) {
+      lines.push(theme.dim("  No runs recorded yet."));
+    } else {
+      for (const run of recentRuns) {
+        const summary = run.summary?.trim() || run.terminationReason || run.status;
+        lines.push(
+          ...renderWrappedBullet(
+            `${run.status} · ${run.workerId ?? "unknown worker"} · ${summary}`,
+            width,
+          ),
+        );
+      }
+    }
+    lines.push(
+      "",
+      theme.dim(
+        "n new task | Tab switch pane | ↑↓ move | a approve | c changes | x dismiss | r refresh | q quit",
+      ),
+    );
+    return lines;
+  }
+
+  private togglePane() {
+    const nextPane: DashboardPane = this.selectedPane === "tasks" ? "attention" : "tasks";
+    if (nextPane === "attention" && !this.snapshot?.attentionItems.length) {
+      this.selectedPane = "tasks";
+      return;
+    }
+    if (nextPane === "tasks" && !this.snapshot?.activeTasks.length) {
+      this.selectedPane = "attention";
+      return;
+    }
+    this.selectedPane = nextPane;
+  }
+
+  private moveSelection(delta: number) {
+    if (!this.snapshot) {
+      return;
+    }
+    if (this.selectedPane === "tasks") {
+      const items = this.snapshot.activeTasks;
+      if (items.length === 0) {
+        return;
+      }
+      const currentIndex = Math.max(
+        0,
+        items.findIndex((task) => task.id === this.selectedTaskId),
+      );
+      const nextIndex = (currentIndex + delta + items.length) % items.length;
+      this.selectedTaskId = items[nextIndex]?.id ?? this.selectedTaskId;
+      return;
+    }
+    const items = this.snapshot.attentionItems;
+    if (items.length === 0) {
+      return;
+    }
+    const currentIndex = Math.max(
+      0,
+      items.findIndex((item) => item.id === this.selectedAttentionId),
+    );
+    const nextIndex = (currentIndex + delta + items.length) % items.length;
+    this.selectedAttentionId = items[nextIndex]?.id ?? this.selectedAttentionId;
+  }
+}
+
+async function callDashboardGateway<T>(method: string, params: Record<string, unknown> = {}) {
+  return await callGateway<T>({
+    method,
+    params,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  });
+}
+
+async function readHealthcheck(repoRoot: string): Promise<HealthcheckPayload | null> {
+  const scriptPath = path.join(repoRoot, "scripts", "arc-self-drive", "healthcheck.sh");
+  const result = await runCommandWithTimeout(["bash", scriptPath], {
+    timeoutMs: 15_000,
+    cwd: repoRoot,
+    env: process.env,
+  }).catch(() => null);
+  if (!result || result.code !== 0) {
+    return null;
+  }
+  try {
+    return JSON.parse(result.stdout) as HealthcheckPayload;
+  } catch {
+    return null;
+  }
+}
+
+async function loadDashboardSnapshot(repoRoot: string): Promise<DashboardSnapshot> {
+  const [summary, taskPayload, reviewPayload, health] = await Promise.all([
+    callDashboardGateway<CodeCockpitWorkspaceSummary>("code.cockpit.summary"),
+    callDashboardGateway<TaskListPayload>("code.task.list", { repoRoot }),
+    callDashboardGateway<ReviewListPayload>("code.review.list", {}),
+    readHealthcheck(repoRoot),
+  ]);
+  const tasks = taskPayload.tasks.filter((task) => task.repoRoot === repoRoot);
+  const reviews = reviewPayload.reviews.filter((review) =>
+    tasks.some((task) => task.id === review.taskId),
+  );
+  const activeTasks = tasks.filter((task) =>
+    ["queued", "planning", "in_progress"].includes(task.status),
+  );
+  const blockedTasks = tasks.filter((task) => task.status === "blocked");
+  const attentionItems: AttentionItem[] = [
+    ...reviews
+      .filter((review) => review.status === "pending")
+      .map((review) => ({ kind: "review" as const, id: review.id, review })),
+    ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
+  ];
+  return {
+    repoRoot,
+    summary,
+    tasks,
+    reviews,
+    activeTasks,
+    attentionItems,
+    health,
+  };
+}
+
+async function nudgeSupervisor() {
+  await runCommandWithTimeout(["systemctl", "--user", "start", "arc-self-drive.service"], {
+    timeoutMs: 10_000,
+    env: process.env,
+  }).catch(() => undefined);
+}
+
+export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
+  void loadConfig();
+  const repoRoot = path.resolve(resolveUserPath(opts.repoRoot?.trim() || process.cwd()));
+  const tui = new TUI(new ProcessTerminal());
+  const root = new Container();
+  const header = new Text("");
+  const dashboard = new ArcDashboardView({
+    onRefresh: () => {
+      void refresh("Refreshing Arc dashboard…");
+    },
+    onNewTask: () => {
+      openTaskPrompt();
+    },
+    onResolveReview: (status) => {
+      void resolveSelectedReview(status);
+    },
+    onQuit: () => {
+      requestExit();
+    },
+  });
+  const footer = new Text("");
+  const promptLabel = new Text(theme.bold("Queue a new Arc task"));
+  const promptInput = new Input();
+  const promptHint = new Text(theme.dim("Enter queues the task. Esc cancels."));
+  let promptVisible = false;
+  let refreshTimer: NodeJS.Timeout | null = null;
+  let inFlightRefresh: Promise<void> | null = null;
+  let exiting = false;
+  let resolveExit: (() => void) | null = null;
+
+  root.addChild(header);
+  root.addChild(dashboard);
+  root.addChild(footer);
+  tui.addChild(root);
+  tui.setFocus(dashboard);
+
+  const setFooter = (message: string) => {
+    footer.setText(theme.dim(message));
+    tui.requestRender();
+  };
+
+  const hideTaskPrompt = () => {
+    if (!promptVisible) {
+      return;
+    }
+    root.removeChild(promptLabel);
+    root.removeChild(promptInput);
+    root.removeChild(promptHint);
+    promptVisible = false;
+    tui.setFocus(dashboard);
+    tui.requestRender();
+  };
+
+  const openTaskPrompt = () => {
+    if (promptVisible) {
+      tui.setFocus(promptInput);
+      return;
+    }
+    promptInput.setValue("");
+    root.addChild(promptLabel);
+    root.addChild(promptInput);
+    root.addChild(promptHint);
+    promptVisible = true;
+    tui.setFocus(promptInput);
+    tui.requestRender();
+  };
+
+  const requestExit = () => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+    stopTuiSafely(() => tui.stop());
+    resolveExit?.();
+  };
+
+  const refresh = async (message = "Refreshing Arc dashboard…") => {
+    if (inFlightRefresh) {
+      return await inFlightRefresh;
+    }
+    dashboard.setStatusMessage(message);
+    setFooter("Arc stays live on the VPS after you quit this dashboard.");
+    inFlightRefresh = (async () => {
+      try {
+        const snapshot = await loadDashboardSnapshot(repoRoot);
+        header.setText(theme.header(`Arc · ${shortenHomePath(repoRoot)}`));
+        dashboard.setSnapshot(snapshot);
+        dashboard.setStatusMessage(
+          `Ready. ${snapshot.activeTasks.length} active tasks · ${snapshot.attentionItems.length} items need attention.`,
+        );
+      } catch (error) {
+        dashboard.setStatusMessage(
+          `Refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        inFlightRefresh = null;
+        tui.requestRender();
+      }
+    })();
+    return await inFlightRefresh;
+  };
+
+  const resolveSelectedReview = async (status: "approved" | "changes_requested" | "dismissed") => {
+    const reviewId = dashboard.getSelectedReviewId();
+    if (!reviewId) {
+      dashboard.setStatusMessage("Select a pending review in the attention pane first.");
+      tui.requestRender();
+      return;
+    }
+    dashboard.setStatusMessage(`Updating review ${reviewId}…`);
+    tui.requestRender();
+    try {
+      await callDashboardGateway("code.review.status", { reviewId, status });
+      await nudgeSupervisor();
+      await refresh(`Review ${reviewId} marked ${status}.`);
+    } catch (error) {
+      dashboard.setStatusMessage(
+        `Failed to update review ${reviewId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      tui.requestRender();
+    }
+  };
+
+  promptInput.onSubmit = (value) => {
+    const title = value.trim();
+    hideTaskPrompt();
+    if (!title) {
+      dashboard.setStatusMessage("Cancelled empty task.");
+      tui.requestRender();
+      return;
+    }
+    void (async () => {
+      dashboard.setStatusMessage(`Queueing task "${title}"…`);
+      tui.requestRender();
+      try {
+        await callDashboardGateway("code.task.add", { title, repoRoot });
+        await nudgeSupervisor();
+        await refresh(`Queued "${title}". Arc will pick it up on the VPS.`);
+      } catch (error) {
+        dashboard.setStatusMessage(
+          `Failed to queue task: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        tui.requestRender();
+      }
+    })();
+  };
+  promptInput.onEscape = () => {
+    hideTaskPrompt();
+    dashboard.setStatusMessage("Cancelled new task prompt.");
+    tui.requestRender();
+  };
+
+  tui.addInputListener((data) => {
+    if (matchesKey(data, Key.ctrl("c"))) {
+      if (promptVisible) {
+        hideTaskPrompt();
+        dashboard.setStatusMessage("Cancelled new task prompt.");
+        tui.requestRender();
+      } else {
+        requestExit();
+      }
+      return { consume: true };
+    }
+    return undefined;
+  });
+
+  await refresh();
+  refreshTimer = setInterval(() => {
+    void refresh();
+  }, 5_000);
+
+  tui.start();
+
+  await new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+}
