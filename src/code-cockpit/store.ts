@@ -64,6 +64,7 @@ export type CodeTask = {
   repoRoot?: string;
   goal?: string;
   notes?: string;
+  blockReason?: string;
   createdAt: string;
   updatedAt: string;
   workerIds: string[];
@@ -664,7 +665,7 @@ export async function createCodeTask(
 export async function updateCodeTaskStatus(
   taskId: string,
   nextStatus: CodeTaskStatus,
-  options?: CodeCockpitStoreOptions,
+  options?: CodeCockpitStoreOptions & { blockReason?: string },
 ): Promise<CodeTask> {
   const status = assertTaskStatus(nextStatus);
   return await mutateStore(options, (store, updatedAt) => {
@@ -672,6 +673,11 @@ export async function updateCodeTaskStatus(
     assertTransition("task", TASK_TRANSITIONS, task.status, status);
     task.status = status;
     task.updatedAt = updatedAt;
+    if (status === "blocked") {
+      task.blockReason = options?.blockReason;
+    } else {
+      task.blockReason = undefined;
+    }
     return task;
   });
 }

@@ -1163,9 +1163,11 @@ class CodeCockpitRuntime {
         lastExitedAt: finishedAt,
         lastExitReason: publishedPr.error ? "draft-pr-failed" : "succeeded",
       });
-      await updateCodeTaskStatus(params.taskId, publishedPr.error ? "blocked" : "done").catch(
-        () => undefined,
-      );
+      await updateCodeTaskStatus(
+        params.taskId,
+        publishedPr.error ? "blocked" : "done",
+        publishedPr.error ? { blockReason: "draft-pr-failed" } : undefined,
+      ).catch(() => undefined);
       return;
     }
 
@@ -1199,7 +1201,9 @@ class CodeCockpitRuntime {
       lastExitedAt: finishedAt,
       lastExitReason: failureReason,
     });
-    await updateCodeTaskStatus(params.taskId, "blocked").catch(() => undefined);
+    await updateCodeTaskStatus(params.taskId, "blocked", { blockReason: failureReason }).catch(
+      () => undefined,
+    );
   }
 
   private async launchWorkerTurn(params: StartCodeWorkerInput) {
@@ -1619,7 +1623,9 @@ class CodeCockpitRuntime {
     }
     const engineSelection = await this.resolveSupervisorEngine(candidate.task, selectedRepoRoot);
     if (!engineSelection.selected) {
-      await updateCodeTaskStatus(candidate.task.id, "blocked").catch(() => undefined);
+      await updateCodeTaskStatus(candidate.task.id, "blocked", {
+        blockReason: engineSelection.reason ?? "no-healthy-engine",
+      }).catch(() => undefined);
       const refreshedStore = await loadCodeCockpitStore();
       const blockedTask =
         refreshedStore.tasks.find((entry) => entry.id === candidate.task.id) ?? candidate.task;

@@ -62,6 +62,7 @@ type DashboardSnapshot = {
   tasks: CodeTask[];
   reviews: CodeReviewRequest[];
   activeTasks: CodeTask[];
+  blockedTasks: CodeTask[];
   attentionItems: AttentionItem[];
   health: HealthcheckPayload | null;
 };
@@ -84,12 +85,13 @@ export type ArcDashboardRenderInput = {
   statusMessage?: string;
 };
 
-type DashboardPane = "tasks" | "attention";
+type DashboardPane = "tasks" | "attention" | "blocked";
 
 type DashboardActions = {
   onRefresh: () => void;
   onNewTask: () => void;
   onResolveReview: (status: "approved" | "changes_requested" | "dismissed") => void;
+  onUnblockTask: (taskId: string) => void;
   onQuit: () => void;
 };
 
@@ -161,6 +163,7 @@ class ArcDashboardView implements Component {
   private selectedPane: DashboardPane = "tasks";
   private selectedTaskId: string | null = null;
   private selectedAttentionId: string | null = null;
+  private selectedBlockedId: string | null = null;
 
   constructor(private readonly actions: DashboardActions) {}
 
@@ -174,11 +177,30 @@ class ArcDashboardView implements Component {
     if (!snapshot.attentionItems.some((item) => item.id === this.selectedAttentionId)) {
       this.selectedAttentionId = fallbackAttentionId;
     }
-    if (this.selectedPane === "tasks" && !this.selectedTaskId && this.selectedAttentionId) {
-      this.selectedPane = "attention";
+    const fallbackBlockedId = snapshot.blockedTasks[0]?.id ?? null;
+    if (!snapshot.blockedTasks.some((task) => task.id === this.selectedBlockedId)) {
+      this.selectedBlockedId = fallbackBlockedId;
     }
-    if (this.selectedPane === "attention" && !this.selectedAttentionId && this.selectedTaskId) {
-      this.selectedPane = "tasks";
+    if (this.selectedPane === "tasks" && !this.selectedTaskId) {
+      this.selectedPane = this.selectedAttentionId
+        ? "attention"
+        : this.selectedBlockedId
+          ? "blocked"
+          : "tasks";
+    }
+    if (this.selectedPane === "attention" && !this.selectedAttentionId) {
+      this.selectedPane = this.selectedTaskId
+        ? "tasks"
+        : this.selectedBlockedId
+          ? "blocked"
+          : "attention";
+    }
+    if (this.selectedPane === "blocked" && !this.selectedBlockedId) {
+      this.selectedPane = this.selectedTaskId
+        ? "tasks"
+        : this.selectedAttentionId
+          ? "attention"
+          : "blocked";
     }
   }
 
@@ -222,6 +244,13 @@ class ArcDashboardView implements Component {
       this.actions.onResolveReview("dismissed");
       return;
     }
+    if (lowered === "u") {
+      const taskId = this.getSelectedBlockedTaskId();
+      if (taskId) {
+        this.actions.onUnblockTask(taskId);
+      }
+      return;
+    }
     if (lowered === "q" || matchesKey(data, Key.ctrl("c"))) {
       this.actions.onQuit();
     }
@@ -235,16 +264,31 @@ class ArcDashboardView implements Component {
     const lines: string[] = [];
     lines.push(...this.renderHeader(width), "");
 
-    const columnGap = 3;
-    const leftWidth = Math.max(34, Math.floor((width - columnGap) * 0.58));
-    const rightWidth = Math.max(24, width - leftWidth - columnGap);
+    const columnGap = 2;
+    const hasBlocked = this.snapshot.blockedTasks.length > 0;
+    const colCount = hasBlocked ? 3 : 2;
+    const totalGap = columnGap * (colCount - 1);
+    const leftWidth = Math.max(30, Math.floor((width - totalGap) * 0.42));
+    const midWidth = hasBlocked
+      ? Math.max(24, Math.floor((width - totalGap) * 0.3))
+      : Math.max(24, width - leftWidth - totalGap);
+    const rightWidth = hasBlocked ? Math.max(24, width - leftWidth - midWidth - totalGap) : 0;
     const leftLines = renderColumn(this.renderTasksPane(leftWidth), leftWidth);
-    const rightLines = renderColumn(this.renderAttentionPane(rightWidth), rightWidth);
-    const rowCount = Math.max(leftLines.length, rightLines.length);
+    const midLines = renderColumn(this.renderAttentionPane(midWidth), midWidth);
+    const blockedLines = hasBlocked
+      ? renderColumn(this.renderBlockedPane(rightWidth), rightWidth)
+      : [];
+    const rowCount = Math.max(leftLines.length, midLines.length, blockedLines.length);
+    const gap = " ".repeat(columnGap);
     for (let index = 0; index < rowCount; index += 1) {
       const left = leftLines[index] ?? " ".repeat(leftWidth);
-      const right = rightLines[index] ?? " ".repeat(rightWidth);
-      lines.push(`${left}${" ".repeat(columnGap)}${right}`);
+      const mid = midLines[index] ?? " ".repeat(midWidth);
+      if (hasBlocked) {
+        const right = blockedLines[index] ?? " ".repeat(rightWidth);
+        lines.push(`${left}${gap}${mid}${gap}${right}`);
+      } else {
+        lines.push(`${left}${gap}${mid}`);
+      }
     }
 
     lines.push("", ...this.renderDetails(width), "", theme.dim(this.statusMessage));
@@ -262,8 +306,17 @@ class ArcDashboardView implements Component {
     return item.review.id;
   }
 
+  getSelectedBlockedTaskId(): string | null {
+    if (this.selectedPane !== "blocked" || !this.selectedBlockedId) {
+      return null;
+    }
+    return this.snapshot?.blockedTasks.some((task) => task.id === this.selectedBlockedId)
+      ? this.selectedBlockedId
+      : null;
+  }
+
   private renderHeader(width: number): string[] {
-    const { summary, health, repoRoot, activeTasks, attentionItems } = this.snapshot!;
+    const { summary, health, repoRoot, activeTasks, attentionItems, blockedTasks } = this.snapshot!;
     const gatewayStatus = health?.gateway?.status ?? "unknown";
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
@@ -284,6 +337,11 @@ class ArcDashboardView implements Component {
         "attention",
         String(attentionItems.length),
         attentionItems.length > 0 ? "alert" : "muted",
+      ),
+      renderStatusChip(
+        "blocked",
+        String(blockedTasks.length),
+        blockedTasks.length > 0 ? "alert" : "muted",
       ),
       renderStatusChip("runs", String(summary.totals.runs), "data"),
       activeWorker
@@ -331,7 +389,7 @@ class ArcDashboardView implements Component {
     const lines = [title];
     const { attentionItems } = this.snapshot!;
     if (attentionItems.length === 0) {
-      lines.push(theme.dim("  No pending reviews or blocked tasks."));
+      lines.push(theme.dim("  No pending reviews."));
       return lines;
     }
     for (const item of attentionItems.slice(0, 8)) {
@@ -348,12 +406,31 @@ class ArcDashboardView implements Component {
             width,
           ),
         );
-        continue;
       }
-      const label = `${prefix} [blocked] ${item.task.title}`;
+    }
+    return lines;
+  }
+
+  private renderBlockedPane(width: number): string[] {
+    const title = renderPanelTitle(
+      "BLOCKED",
+      width,
+      this.selectedPane === "blocked" ? "alert" : "data",
+    );
+    const lines = [title];
+    const { blockedTasks } = this.snapshot!;
+    if (blockedTasks.length === 0) {
+      lines.push(theme.dim("  No blocked tasks."));
+      return lines;
+    }
+    for (const task of blockedTasks.slice(0, 8)) {
+      const selected = task.id === this.selectedBlockedId && this.selectedPane === "blocked";
+      const prefix = selected ? theme.accent("›") : theme.dim("·");
+      const reason = task.blockReason ?? "needs input";
+      const label = `${prefix} [${reason}] ${task.title}`;
       lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
       lines.push(
-        ...renderWrappedBullet(theme.dim(taskGoal(item.task) ?? "needs intervention"), width),
+        ...renderWrappedBullet(theme.dim(taskGoal(task) ?? "needs operator intervention"), width),
       );
     }
     return lines;
@@ -361,7 +438,7 @@ class ArcDashboardView implements Component {
 
   private renderDetails(width: number): string[] {
     const lines = [renderPanelTitle("SYSTEM PULSE", width, "pulse")];
-    const { summary, health, attentionItems, activeTasks } = this.snapshot!;
+    const { summary, health, attentionItems, activeTasks, blockedTasks } = this.snapshot!;
     const gatewayStatus = health?.gateway?.status ?? "unknown";
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
@@ -374,6 +451,7 @@ class ArcDashboardView implements Component {
           `codex ${codexHealth}`,
           `active ${activeTasks.length}`,
           `attention ${attentionItems.length}`,
+          `blocked ${blockedTasks.length}`,
           `worker ${activeWorker?.workerName ?? "idle"}`,
         ].join(" | "),
         width,
@@ -389,6 +467,10 @@ class ArcDashboardView implements Component {
       this.selectedPane === "attention"
         ? (this.snapshot!.attentionItems.find((item) => item.id === this.selectedAttentionId) ??
           null)
+        : null;
+    const selectedBlocked =
+      this.selectedPane === "blocked"
+        ? (this.snapshot!.blockedTasks.find((task) => task.id === this.selectedBlockedId) ?? null)
         : null;
 
     if (selectedTask) {
@@ -416,11 +498,12 @@ class ArcDashboardView implements Component {
           width,
         ),
       );
-    } else if (selectedAttention?.kind === "blocked") {
-      lines.push(truncateToWidth(`${selectedAttention.task.title} · blocked`, width));
+    } else if (selectedBlocked) {
+      const reason = selectedBlocked.blockReason ?? "needs input";
+      lines.push(truncateToWidth(`${selectedBlocked.title} · blocked · ${reason}`, width));
       lines.push(
         ...renderWrappedBullet(
-          taskGoal(selectedAttention.task) ?? "This task is blocked and needs operator input.",
+          taskGoal(selectedBlocked) ?? "This task is blocked and needs operator input.",
           width,
         ),
       );
@@ -446,23 +529,34 @@ class ArcDashboardView implements Component {
     lines.push(
       "",
       theme.dim(
-        "n new task | Tab switch pane | ↑↓ move | a approve | c changes | x dismiss | r refresh | q quit",
+        "n new | Tab pane | ↑↓ move | a approve | c changes | x dismiss | u unblock | r refresh | q quit",
       ),
     );
     return lines;
   }
 
   private togglePane() {
-    const nextPane: DashboardPane = this.selectedPane === "tasks" ? "attention" : "tasks";
-    if (nextPane === "attention" && !this.snapshot?.attentionItems.length) {
-      this.selectedPane = "tasks";
-      return;
+    const paneOrder: DashboardPane[] = ["tasks", "attention", "blocked"];
+    const paneHasItems = (pane: DashboardPane): boolean => {
+      if (!this.snapshot) {
+        return false;
+      }
+      if (pane === "tasks") {
+        return this.snapshot.activeTasks.length > 0;
+      }
+      if (pane === "attention") {
+        return this.snapshot.attentionItems.length > 0;
+      }
+      return this.snapshot.blockedTasks.length > 0;
+    };
+    const currentIndex = paneOrder.indexOf(this.selectedPane);
+    for (let offset = 1; offset < paneOrder.length; offset += 1) {
+      const candidate = paneOrder[(currentIndex + offset) % paneOrder.length];
+      if (paneHasItems(candidate)) {
+        this.selectedPane = candidate;
+        return;
+      }
     }
-    if (nextPane === "tasks" && !this.snapshot?.activeTasks.length) {
-      this.selectedPane = "attention";
-      return;
-    }
-    this.selectedPane = nextPane;
   }
 
   private moveSelection(delta: number) {
@@ -482,16 +576,29 @@ class ArcDashboardView implements Component {
       this.selectedTaskId = items[nextIndex]?.id ?? this.selectedTaskId;
       return;
     }
-    const items = this.snapshot.attentionItems;
+    if (this.selectedPane === "attention") {
+      const items = this.snapshot.attentionItems;
+      if (items.length === 0) {
+        return;
+      }
+      const currentIndex = Math.max(
+        0,
+        items.findIndex((item) => item.id === this.selectedAttentionId),
+      );
+      const nextIndex = (currentIndex + delta + items.length) % items.length;
+      this.selectedAttentionId = items[nextIndex]?.id ?? this.selectedAttentionId;
+      return;
+    }
+    const items = this.snapshot.blockedTasks;
     if (items.length === 0) {
       return;
     }
     const currentIndex = Math.max(
       0,
-      items.findIndex((item) => item.id === this.selectedAttentionId),
+      items.findIndex((task) => task.id === this.selectedBlockedId),
     );
     const nextIndex = (currentIndex + delta + items.length) % items.length;
-    this.selectedAttentionId = items[nextIndex]?.id ?? this.selectedAttentionId;
+    this.selectedBlockedId = items[nextIndex]?.id ?? this.selectedBlockedId;
   }
 }
 
@@ -507,18 +614,16 @@ function buildDashboardSnapshot(
     ["queued", "planning", "in_progress"].includes(task.status),
   );
   const blockedTasks = tasks.filter((task) => task.status === "blocked");
-  const attentionItems: AttentionItem[] = [
-    ...scopedReviews
-      .filter((review) => review.status === "pending")
-      .map((review) => ({ kind: "review" as const, id: review.id, review })),
-    ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
-  ];
+  const attentionItems: AttentionItem[] = scopedReviews
+    .filter((review) => review.status === "pending")
+    .map((review) => ({ kind: "review" as const, id: review.id, review }));
   return {
     repoRoot,
     summary,
     tasks,
     reviews: scopedReviews,
     activeTasks,
+    blockedTasks,
     attentionItems,
     health,
   };
@@ -529,6 +634,7 @@ export function renderArcDashboardForTest(input: ArcDashboardRenderInput): strin
     onRefresh: () => undefined,
     onNewTask: () => undefined,
     onResolveReview: () => undefined,
+    onUnblockTask: () => undefined,
     onQuit: () => undefined,
   });
   view.setSnapshot(
@@ -606,6 +712,9 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     },
     onResolveReview: (status) => {
       void resolveSelectedReview(status);
+    },
+    onUnblockTask: (taskId) => {
+      void unblockTask(taskId);
     },
     onQuit: () => {
       requestExit();
@@ -694,7 +803,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
         header.setText(theme.dim("Local dashboard · remote Arc runtime"));
         dashboard.setSnapshot(snapshot);
         dashboard.setStatusMessage(
-          `Ready. ${snapshot.activeTasks.length} active tasks · ${snapshot.attentionItems.length} items need attention.`,
+          `Ready. ${snapshot.activeTasks.length} active · ${snapshot.attentionItems.length} reviews · ${snapshot.blockedTasks.length} blocked.`,
         );
       } catch (error) {
         dashboard.setStatusMessage(
@@ -724,6 +833,21 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     } catch (error) {
       dashboard.setStatusMessage(
         `Failed to update review ${reviewId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      tui.requestRender();
+    }
+  };
+
+  const unblockTask = async (taskId: string) => {
+    dashboard.setStatusMessage(`Unblocking task ${taskId}…`);
+    tui.requestRender();
+    try {
+      await callDashboardGateway("code.task.status", { taskId, status: "queued" });
+      await nudgeSupervisor(repoRoot);
+      await refresh(`Task ${taskId} unblocked and re-queued.`);
+    } catch (error) {
+      dashboard.setStatusMessage(
+        `Failed to unblock task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       tui.requestRender();
     }
