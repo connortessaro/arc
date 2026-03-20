@@ -63,6 +63,16 @@ type DashboardSnapshot = {
   health: HealthcheckPayload | null;
 };
 
+export type ArcDashboardRenderInput = {
+  width: number;
+  repoRoot: string;
+  summary: CodeCockpitWorkspaceSummary;
+  tasks: CodeTask[];
+  reviews: CodeReviewRequest[];
+  health: HealthcheckPayload | null;
+  statusMessage?: string;
+};
+
 type DashboardPane = "tasks" | "attention";
 
 type DashboardActions = {
@@ -85,6 +95,10 @@ function renderColumn(lines: string[], width: number): string[] {
   return lines.map((line) => padAnsi(line, width));
 }
 
+function clampLinesToWidth(lines: string[], width: number): string[] {
+  return lines.map((line) => truncateToWidth(line, width));
+}
+
 function shortStatusLabel(status: CodeTaskStatus): string {
   return status.replaceAll("_", " ");
 }
@@ -96,7 +110,10 @@ function taskGoal(task: CodeTask): string | undefined {
 function renderWrappedBullet(text: string, width: number, indent = "  "): string[] {
   const contentWidth = Math.max(8, width - indent.length);
   const wrapped = wrapTextWithAnsi(text, contentWidth);
-  return wrapped.map((line, index) => `${index === 0 ? indent : `${indent} `}${line}`);
+  return clampLinesToWidth(
+    wrapped.map((line, index) => `${index === 0 ? indent : `${indent} `}${line}`),
+    width,
+  );
 }
 
 class ArcDashboardView implements Component {
@@ -192,7 +209,7 @@ class ArcDashboardView implements Component {
     }
 
     lines.push("", ...this.renderDetails(width), "", theme.dim(this.statusMessage));
-    return lines;
+    return clampLinesToWidth(lines, width);
   }
 
   getSelectedReviewId(): string | null {
@@ -397,6 +414,39 @@ class ArcDashboardView implements Component {
     const nextIndex = (currentIndex + delta + items.length) % items.length;
     this.selectedAttentionId = items[nextIndex]?.id ?? this.selectedAttentionId;
   }
+}
+
+export function renderArcDashboardForTest(input: ArcDashboardRenderInput): string[] {
+  const reviews = input.reviews.filter((review) =>
+    input.tasks.some((task) => task.id === review.taskId),
+  );
+  const activeTasks = input.tasks.filter((task) =>
+    ["queued", "planning", "in_progress"].includes(task.status),
+  );
+  const blockedTasks = input.tasks.filter((task) => task.status === "blocked");
+  const attentionItems: AttentionItem[] = [
+    ...reviews
+      .filter((review) => review.status === "pending")
+      .map((review) => ({ kind: "review" as const, id: review.id, review })),
+    ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
+  ];
+  const view = new ArcDashboardView({
+    onRefresh: () => undefined,
+    onNewTask: () => undefined,
+    onResolveReview: () => undefined,
+    onQuit: () => undefined,
+  });
+  view.setSnapshot({
+    repoRoot: input.repoRoot,
+    summary: input.summary,
+    tasks: input.tasks,
+    reviews,
+    activeTasks,
+    attentionItems,
+    health: input.health,
+  });
+  view.setStatusMessage(input.statusMessage ?? "Ready.");
+  return view.render(input.width);
 }
 
 async function callDashboardGateway<T>(method: string, params: Record<string, unknown> = {}) {
