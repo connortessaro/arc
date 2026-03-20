@@ -814,6 +814,13 @@ async function executeGatewayRequestWithScopes<T>(params: {
         resolve(value as T);
       }
     };
+    const stopClientAndSettle = async (err?: Error, value?: T) => {
+      ignoreClose = true;
+      try {
+        await client.stopAndWait();
+      } catch {}
+      stop(err, value);
+    };
 
     const client = new GatewayClient({
       url,
@@ -844,29 +851,25 @@ async function executeGatewayRequestWithScopes<T>(params: {
             expectFinal: opts.expectFinal,
             timeoutMs: opts.timeoutMs,
           });
-          ignoreClose = true;
-          stop(undefined, result);
-          client.stop();
+          await stopClientAndSettle(undefined, result);
         } catch (err) {
-          ignoreClose = true;
-          client.stop();
-          stop(err as Error);
+          await stopClientAndSettle(err as Error);
         }
       },
       onClose: (code, reason) => {
         if (settled || ignoreClose) {
           return;
         }
-        ignoreClose = true;
-        client.stop();
-        stop(new Error(formatGatewayCloseError(code, reason, params.connectionDetails)));
+        void stopClientAndSettle(
+          new Error(formatGatewayCloseError(code, reason, params.connectionDetails)),
+        );
       },
     });
 
     const timer = setTimeout(() => {
-      ignoreClose = true;
-      client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      void stopClientAndSettle(
+        new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)),
+      );
     }, safeTimerTimeoutMs);
 
     client.start();
