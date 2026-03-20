@@ -10,6 +10,7 @@ mkdir -p "${LOCAL_BIN_DIR}"
 
 cat > "${LOCAL_BIN_DIR}/openclaw" <<EOF
 #!/usr/bin/env bash
+cd -- "${ROOT_DIR}"
 exec node --import tsx "${ROOT_DIR}/src/index.ts" "\$@"
 EOF
 
