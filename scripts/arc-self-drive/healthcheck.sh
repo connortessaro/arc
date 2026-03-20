@@ -131,19 +131,19 @@ jq -n \
       exists: $authEnvExists
     },
     github: {
-      path: ($ghPath | select(. != "")),
+      path: (if $ghPath == "" then null else $ghPath end),
       health: $githubHealth,
       tokenConfigured: $githubTokenConfigured,
-      baseBranch: ($githubBaseBranch | select(. != "")),
-      pushUrl: ($githubPushUrl | select(. != ""))
+      baseBranch: (if $githubBaseBranch == "" then null else $githubBaseBranch end),
+      pushUrl: (if $githubPushUrl == "" then null else $githubPushUrl end)
     },
     engines: {
       codex: {
-        path: ($codexPath | select(. != "")),
+        path: (if $codexPath == "" then null else $codexPath end),
         health: $codexHealth
       },
       claude: {
-        path: ($claudePath | select(. != "")),
+        path: (if $claudePath == "" then null else $claudePath end),
         health: $claudeHealth
       }
     }
