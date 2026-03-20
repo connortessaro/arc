@@ -557,6 +557,8 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
   root.addChild(footer);
   tui.addChild(root);
   tui.setFocus(dashboard);
+  header.setText(theme.header(`Arc · ${shortenHomePath(repoRoot)}`));
+  footer.setText(theme.dim("Arc stays live on the VPS after you quit this dashboard."));
 
   const setFooter = (message: string) => {
     footer.setText(theme.dim(message));
@@ -699,12 +701,13 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     return undefined;
   });
 
+  tui.start();
+  tui.requestRender();
+
   await refresh();
   refreshTimer = setInterval(() => {
     void refresh();
   }, 5_000);
-
-  tui.start();
 
   await new Promise<void>((resolve) => {
     resolveExit = resolve;
