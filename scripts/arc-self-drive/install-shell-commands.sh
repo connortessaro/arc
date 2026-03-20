@@ -43,5 +43,7 @@ EOF
 
 ensure_shell_path "${HOME}/.profile"
 ensure_shell_path "${HOME}/.bashrc"
+ensure_shell_path "${HOME}/.zprofile"
+ensure_shell_path "${HOME}/.zshrc"
 
 echo "Installed arc and openclaw shims into ${LOCAL_BIN_DIR}"
