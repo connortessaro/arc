@@ -136,6 +136,10 @@ fi
 pnpm --dir "$ROOT_DIR" install --frozen-lockfile --force
 repair_broken_registry_packages
 pnpm --dir "$ROOT_DIR" build
+# Some packages survive install-time repair but lose their top-level entry files
+# during the build/postbuild pipeline. Repair them again before restarting the
+# gateway so the source runtime resolves the same package paths the build used.
+repair_broken_registry_packages
 bash "$ROOT_DIR/scripts/arc-self-drive/install-systemd.sh" >/dev/null
 
 deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))
