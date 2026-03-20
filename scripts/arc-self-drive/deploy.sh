@@ -105,11 +105,14 @@ repair_registry_package() {
   local encoded_name="${package_name//\//+}"
   local preferred_package_dir="" preferred_package_path=""
   local package_matches
-  package_matches="$(find "$ROOT_DIR/node_modules/.pnpm" -maxdepth 1 -type d -name "${encoded_name}@*" | sort || true)"
+  package_matches="$(find "$ROOT_DIR/node_modules/.pnpm" -maxdepth 1 -type d -name "${encoded_name}@*" | sort -V || true)"
 
   [[ -n "$package_matches" ]] || return 0
 
   preferred_package_path="$(resolve_root_package_dir "$package_name")"
+  if [[ -n "$preferred_package_path" ]]; then
+    preferred_package_dir="${preferred_package_path%/node_modules/$package_name}"
+  fi
 
   while IFS= read -r package_dir; do
     [[ -n "$package_dir" ]] || continue
@@ -117,10 +120,6 @@ repair_registry_package() {
     package_base="$(basename "$package_dir")"
     package_suffix="${package_base#${encoded_name}@}"
     package_version="${package_suffix%%_*}"
-
-    if [[ -n "$preferred_package_path" && "$preferred_package_path" == "$package_dir/node_modules/$package_name" ]]; then
-      preferred_package_dir="$package_dir"
-    fi
 
     archive_path="$(npm pack "${package_name}@${package_version}" --silent | tail -n 1)"
     rm -rf "$package_dir/node_modules/$package_name"
@@ -130,7 +129,9 @@ repair_registry_package() {
   done <<< "$package_matches"
 
   local selected_package_dir
-  selected_package_dir="${preferred_package_dir:-$(printf '%s\n' "$package_matches" | head -n 1)}"
+  # Keep the repo's direct dependency in charge; otherwise bias toward the newest
+  # discovered version instead of the oldest transitive copy.
+  selected_package_dir="${preferred_package_dir:-$(printf '%s\n' "$package_matches" | tail -n 1)}"
   mkdir -p "$(dirname "$ROOT_DIR/node_modules/$package_name")"
   ln -sfn "$selected_package_dir/node_modules/$package_name" "$ROOT_DIR/node_modules/$package_name"
 }
