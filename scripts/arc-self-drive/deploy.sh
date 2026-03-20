@@ -20,6 +20,30 @@ REPAIRABLE_REGISTRY_PACKAGES=(
   "zod"
 )
 
+wait_for_unit_inactive() {
+  local unit_name="$1"
+  local timeout_seconds="${2:-30}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local state
+
+  while true; do
+    state="$(systemctl --user is-active "$unit_name" 2>/dev/null || true)"
+    case "$state" in
+      inactive|failed|unknown|deactivating)
+        return 0
+        ;;
+      *)
+        if (( SECONDS >= deadline )); then
+          echo "Timed out waiting for ${unit_name} to stop (state: ${state:-unknown})." >&2
+          systemctl --user status "$unit_name" --no-pager >&2 || true
+          return 1
+        fi
+        sleep 1
+        ;;
+    esac
+  done
+}
+
 require_clean_checkout() {
   if ! git -C "$ROOT_DIR" diff --quiet --ignore-submodules --; then
     echo "Refusing to deploy from a dirty checkout: $ROOT_DIR" >&2
@@ -133,7 +157,11 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-systemctl --user stop openclaw-gateway.service arc-self-drive.service arc-self-drive.timer >/dev/null 2>&1 || true
+systemctl --user stop arc-self-drive.timer arc-self-drive.service openclaw-gateway.service
+wait_for_unit_inactive arc-self-drive.timer 15
+wait_for_unit_inactive arc-self-drive.service 15
+wait_for_unit_inactive openclaw-gateway.service 45
+systemctl --user reset-failed openclaw-gateway.service arc-self-drive.service >/dev/null 2>&1 || true
 
 pnpm --dir "$ROOT_DIR" install --frozen-lockfile --force
 repair_broken_registry_packages
