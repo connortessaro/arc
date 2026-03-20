@@ -10,6 +10,7 @@ Arc can now run a constrained self-drive loop on the VPS:
 - it does not push or merge
 - it treats `/srv/arc/repo` as the canonical Arc checkout
 - it can expose `arc` and `openclaw` as real VPS commands so you do not have to remember repo-local script paths
+- `arc` now opens a VPS dashboard TUI by default, so the operator surface does not depend on memorizing subcommands
 
 ## Commands
 
@@ -17,6 +18,7 @@ Use the VPS operator shell commands after installing the runtime:
 
 ```bash
 arc
+arc dashboard
 arc status
 arc do "Build the next Arc feature"
 arc tasks --json
@@ -28,6 +30,7 @@ arc daemon status
 Run one supervisor cycle through the gateway:
 
 ```bash
+openclaw code tui --repo /srv/arc/repo
 openclaw code supervisor tick --repo /srv/arc/repo --json
 ```
 
@@ -117,6 +120,8 @@ Install notes:
 - `openclaw code task *` and `openclaw code review *` use the remote gateway automatically when `gateway.mode=remote`, so the VPS queue can be managed from the Mac CLI
 - `scripts/arc-self-drive/mac-remote-code.sh` opens a temporary SSH tunnel, reads the active VPS gateway token, and runs the source CLI in remote mode without changing your global config
 - `scripts/arc-self-drive/run-code-via-gateway.sh` forces `openclaw code` traffic through the live gateway on the VPS instead of mutating the cockpit store directly from a second process
-- completed work lands in review; self-drive pauses new work when there are 3 pending reviews
-- `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
+- `arc` and `openclaw code tui` open the same VPS dashboard; `n` queues a task, `a/c/x` resolve reviews, and `q` exits without stopping the daemon
+- successful unattended runs mark the worker `completed`, mark the task `done`, and let the queue continue
+- failed unattended runs mark the worker `failed` and move the task to `blocked`, so bad work becomes visible instead of silently retrying
+- manual reviews still work when they exist: `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled
