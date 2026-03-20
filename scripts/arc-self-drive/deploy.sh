@@ -56,7 +56,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
-pnpm --dir "$ROOT_DIR" install --frozen-lockfile
+pnpm --dir "$ROOT_DIR" install --frozen-lockfile --force
 pnpm --dir "$ROOT_DIR" build
 bash "$ROOT_DIR/scripts/arc-self-drive/install-systemd.sh" >/dev/null
 
