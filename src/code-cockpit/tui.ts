@@ -31,6 +31,7 @@ type CodeCockpitTuiOptions = {
 };
 
 const DASHBOARD_HEALTHCHECK_INTERVAL_MS = 30_000;
+const DASHBOARD_GATEWAY_TIMEOUT_MS = 60_000;
 
 type TaskListPayload = {
   storePath: string;
@@ -455,6 +456,7 @@ async function callDashboardGateway<T>(method: string, params: Record<string, un
   return await callGateway<T>({
     method,
     params,
+    timeoutMs: DASHBOARD_GATEWAY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });

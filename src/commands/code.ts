@@ -366,6 +366,8 @@ function buildStoreOptions(): CodeCockpitStoreOptions {
   return {};
 }
 
+const CODE_GATEWAY_TIMEOUT_MS = 60_000;
+
 function shouldUseRemoteCodeGateway(): boolean {
   return loadConfig().gateway?.mode === "remote";
 }
@@ -374,6 +376,7 @@ async function callCodeGateway<T>(method: string, params: Record<string, unknown
   return await callGateway<T>({
     method,
     params,
+    timeoutMs: CODE_GATEWAY_TIMEOUT_MS,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   });
