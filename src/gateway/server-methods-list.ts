@@ -45,6 +45,7 @@ const BASE_METHODS = [
   "agents.files.get",
   "agents.files.set",
   "code.cockpit.summary",
+  "code.cockpit.dashboard",
   "code.task.add",
   "code.task.list",
   "code.task.show",

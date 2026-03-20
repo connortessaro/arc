@@ -2,17 +2,71 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEFAULT_REPO_ROOT="${ARC_REPO_ROOT:-$ROOT_DIR}"
+LOCAL_REPO_ROOT="${ARC_REPO_ROOT:-$ROOT_DIR}"
+REMOTE_REPO_ROOT="${ARC_REMOTE_REPO_ROOT:-/srv/arc/repo}"
+REMOTE_SSH_TARGET="${ARC_REMOTE_SSH_TARGET:-arc-droplet}"
+REMOTE_SSH_IDENTITY="${ARC_REMOTE_SSH_IDENTITY:-}"
+ARC_OPERATOR_MODE="${ARC_OPERATOR_MODE:-auto}"
 GATEWAY_UNIT="openclaw-gateway.service"
 TIMER_UNIT="arc-self-drive.timer"
 TICK_UNIT="arc-self-drive.service"
 
+REMOTE_SSH_ARGS=(ssh)
+if [[ -n "$REMOTE_SSH_IDENTITY" ]]; then
+  REMOTE_SSH_ARGS+=(-i "$REMOTE_SSH_IDENTITY")
+fi
+
+use_remote_operator() {
+  case "$ARC_OPERATOR_MODE" in
+    remote)
+      return 0
+      ;;
+    local)
+      return 1
+      ;;
+    auto)
+      [[ "$(uname -s)" == "Darwin" ]]
+      ;;
+    *)
+      echo "Unknown ARC_OPERATOR_MODE: ${ARC_OPERATOR_MODE}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+default_repo_root() {
+  if use_remote_operator; then
+    printf '%s\n' "$REMOTE_REPO_ROOT"
+  else
+    printf '%s\n' "$LOCAL_REPO_ROOT"
+  fi
+}
+
 run_code() {
+  if use_remote_operator; then
+    ARC_REMOTE_REPO_ROOT="$REMOTE_REPO_ROOT" \
+      ARC_REMOTE_SSH_TARGET="$REMOTE_SSH_TARGET" \
+      ARC_REMOTE_SSH_IDENTITY="$REMOTE_SSH_IDENTITY" \
+      bash "${ROOT_DIR}/scripts/arc-self-drive/run-code-via-ssh-tunnel.sh" "$@"
+    return
+  fi
   bash "${ROOT_DIR}/scripts/arc-self-drive/run-code-via-gateway.sh" "$@"
 }
 
+remote_bash() {
+  local command="$1"
+  "${REMOTE_SSH_ARGS[@]}" "$REMOTE_SSH_TARGET" "bash -lc $(printf '%q' "$command")"
+}
+
+remote_repo_command() {
+  local command="$1"
+  local repo_quoted
+  printf -v repo_quoted '%q' "$REMOTE_REPO_ROOT"
+  remote_bash "source ~/.profile && cd ${repo_quoted} && ${command}"
+}
+
 nudge_supervisor() {
-  systemctl --user start "${TICK_UNIT}" >/dev/null 2>&1 || true
+  run_code supervisor tick --repo "$(default_repo_root)" --json >/dev/null 2>&1 || true
 }
 
 print_usage() {
@@ -23,7 +77,7 @@ Usage:
   arc                       Open the Arc dashboard TUI
   arc dashboard             Open the Arc dashboard TUI
   arc status                Show gateway, engine, and queue status
-  arc do "<goal>"           Queue a new task for ${DEFAULT_REPO_ROOT}
+  arc do "<goal>"           Queue a new task for $(default_repo_root)
   arc tasks [args...]       List tasks through the live gateway
   arc blocked [args...]     List blocked tasks that need intervention
   arc reviews [args...]     List reviews through the live gateway
@@ -38,10 +92,16 @@ EOF
 }
 
 run_dashboard() {
-  run_code tui --repo "${DEFAULT_REPO_ROOT}" "$@"
+  run_code tui --repo "$(default_repo_root)" "$@"
 }
 
 show_status() {
+  if use_remote_operator; then
+    remote_repo_command "bash scripts/arc-self-drive/healthcheck.sh"
+    echo "---"
+    remote_repo_command "bash scripts/arc-self-drive/status.sh"
+    return
+  fi
   bash "${ROOT_DIR}/scripts/arc-self-drive/healthcheck.sh"
   echo "---"
   bash "${ROOT_DIR}/scripts/arc-self-drive/status.sh"
@@ -50,6 +110,11 @@ show_status() {
 show_doctor() {
   show_status
   echo "---"
+  if use_remote_operator; then
+    printf 'arc(local)=%s\n' "$(command -v arc || echo missing)"
+    remote_bash "source ~/.profile && printf 'openclaw(remote)=%s\n' \"\$(command -v openclaw || echo missing)\" && printf 'codex(remote)=%s\n' \"\$(command -v codex || echo missing)\" && printf 'claude(remote)=%s\n' \"\$(command -v claude || echo missing)\""
+    return
+  fi
   printf 'arc=%s\n' "$(command -v arc || echo missing)"
   printf 'openclaw=%s\n' "$(command -v openclaw || echo missing)"
   printf 'codex=%s\n' "$(command -v codex || echo missing)"
@@ -58,6 +123,27 @@ show_doctor() {
 
 daemon_command() {
   local action="${1:-status}"
+  if use_remote_operator; then
+    case "$action" in
+      status)
+        remote_bash "source ~/.profile && systemctl --user status ${GATEWAY_UNIT} ${TICK_UNIT} ${TIMER_UNIT} --no-pager"
+        ;;
+      start)
+        remote_bash "source ~/.profile && systemctl --user start ${GATEWAY_UNIT} ${TIMER_UNIT} && systemctl --user start ${TICK_UNIT} || true"
+        ;;
+      stop)
+        remote_bash "source ~/.profile && systemctl --user stop ${TIMER_UNIT} ${TICK_UNIT} ${GATEWAY_UNIT}"
+        ;;
+      restart)
+        remote_bash "source ~/.profile && systemctl --user restart ${GATEWAY_UNIT} ${TIMER_UNIT} && systemctl --user start ${TICK_UNIT} || true"
+        ;;
+      *)
+        echo "Unknown daemon action: ${action}" >&2
+        exit 1
+        ;;
+    esac
+    return
+  fi
   case "$action" in
     status)
       systemctl --user status "${GATEWAY_UNIT}" "${TICK_UNIT}" "${TIMER_UNIT}" --no-pager
@@ -123,14 +209,14 @@ case "$command_name" in
     fi
     title="$1"
     shift
-    run_code task add "$title" --repo "${DEFAULT_REPO_ROOT}" "$@"
+    run_code task add "$title" --repo "$(default_repo_root)" "$@"
     nudge_supervisor
     ;;
   tasks)
-    run_code task list --repo "${DEFAULT_REPO_ROOT}" "$@"
+    run_code task list --repo "$(default_repo_root)" "$@"
     ;;
   blocked)
-    run_code task list --repo "${DEFAULT_REPO_ROOT}" --status blocked "$@"
+    run_code task list --repo "$(default_repo_root)" --status blocked "$@"
     ;;
   task)
     subcommand="${1:-}"
@@ -146,10 +232,10 @@ case "$command_name" in
       fi
       title="$1"
       shift
-      run_code task add "$title" --repo "${DEFAULT_REPO_ROOT}" "$@"
+      run_code task add "$title" --repo "$(default_repo_root)" "$@"
       nudge_supervisor
     elif [[ "$subcommand" == "list" ]]; then
-      run_code task list --repo "${DEFAULT_REPO_ROOT}" "$@"
+      run_code task list --repo "$(default_repo_root)" "$@"
     else
       run_code task "$subcommand" "$@"
       if [[ "$subcommand" == "status" ]]; then
@@ -175,7 +261,7 @@ case "$command_name" in
     daemon_command "${1:-status}"
     ;;
   tick)
-    bash "${ROOT_DIR}/scripts/arc-self-drive/run-supervisor-tick.sh" --repo "${DEFAULT_REPO_ROOT}" "$@"
+    run_code supervisor tick --repo "$(default_repo_root)" "$@"
     ;;
   doctor)
     show_doctor

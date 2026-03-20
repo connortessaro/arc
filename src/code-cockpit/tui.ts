@@ -12,6 +12,7 @@ import {
   wrapTextWithAnsi,
   type Component,
 } from "@mariozechner/pi-tui";
+import chalk from "chalk";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -32,14 +33,13 @@ type CodeCockpitTuiOptions = {
 
 const DASHBOARD_HEALTHCHECK_INTERVAL_MS = 30_000;
 const DASHBOARD_GATEWAY_TIMEOUT_MS = 60_000;
+const DASHBOARD_REFRESH_INTERVAL_MS = 10_000;
 
-type TaskListPayload = {
+type DashboardPayload = {
   storePath: string;
+  repoRoot: string;
+  summary: CodeCockpitWorkspaceSummary;
   tasks: CodeTask[];
-};
-
-type ReviewListPayload = {
-  storePath: string;
   reviews: CodeReviewRequest[];
 };
 
@@ -64,6 +64,14 @@ type DashboardSnapshot = {
   activeTasks: CodeTask[];
   attentionItems: AttentionItem[];
   health: HealthcheckPayload | null;
+};
+
+const operatorColors = {
+  pulse: chalk.hex("#9cff93"),
+  data: chalk.hex("#81ecff"),
+  alert: chalk.hex("#ffb632"),
+  muted: chalk.hex("#5c6978"),
+  border: chalk.hex("#3f4a56"),
 };
 
 export type ArcDashboardRenderInput = {
@@ -117,6 +125,34 @@ function renderWrappedBullet(text: string, width: number, indent = "  "): string
     wrapped.map((line, index) => `${index === 0 ? indent : `${indent} `}${line}`),
     width,
   );
+}
+
+function renderPanelTitle(title: string, width: number, tone: "pulse" | "data" | "alert" = "data") {
+  const color = operatorColors[tone];
+  return truncateToWidth(color.bold(`[${title}]`), width);
+}
+
+function renderStatusChip(
+  label: string,
+  value: string,
+  tone: "pulse" | "data" | "alert" | "muted" = "muted",
+) {
+  const color = operatorColors[tone];
+  return color(`${label.toUpperCase()} ${value.toUpperCase()}`);
+}
+
+function pickHealthTone(value: string | undefined): "pulse" | "data" | "alert" | "muted" {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "unknown") {
+    return "muted";
+  }
+  if (["healthy", "live", "active", "running", "connected", "ok"].includes(normalized)) {
+    return "pulse";
+  }
+  if (["idle", "pending"].includes(normalized)) {
+    return "data";
+  }
+  return "alert";
 }
 
 class ArcDashboardView implements Component {
@@ -200,7 +236,7 @@ class ArcDashboardView implements Component {
     lines.push(...this.renderHeader(width), "");
 
     const columnGap = 3;
-    const leftWidth = Math.max(24, Math.floor((width - columnGap) / 2));
+    const leftWidth = Math.max(34, Math.floor((width - columnGap) * 0.58));
     const rightWidth = Math.max(24, width - leftWidth - columnGap);
     const leftLines = renderColumn(this.renderTasksPane(leftWidth), leftWidth);
     const rightLines = renderColumn(this.renderAttentionPane(rightWidth), rightWidth);
@@ -232,22 +268,41 @@ class ArcDashboardView implements Component {
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
     const activeWorker = summary.activeLanes.find((lane) => lane.status === "running");
-    const topLine = theme.header(`Arc dashboard · ${shortenHomePath(repoRoot)}`);
+    const topLine = operatorColors.pulse.bold(
+      `ARC OPERATOR CONSOLE · ${shortenHomePath(repoRoot)}`,
+    );
     const stats = [
-      `gateway ${gatewayStatus}`,
-      `claude ${claudeHealth}`,
-      `codex ${codexHealth}`,
-      `active ${activeTasks.length}`,
-      `attention ${attentionItems.length}`,
-      `runs ${summary.totals.runs}`,
-      activeWorker ? `worker ${activeWorker.workerName}` : "worker idle",
-    ].join(" | ");
-    return [truncateToWidth(topLine, width), theme.dim(truncateToWidth(stats, width))];
+      renderStatusChip("gw", gatewayStatus, pickHealthTone(gatewayStatus)),
+      renderStatusChip("claude", claudeHealth, pickHealthTone(claudeHealth)),
+      renderStatusChip("codex", codexHealth, pickHealthTone(codexHealth)),
+      renderStatusChip(
+        "active",
+        String(activeTasks.length),
+        activeTasks.length > 0 ? "data" : "muted",
+      ),
+      renderStatusChip(
+        "attention",
+        String(attentionItems.length),
+        attentionItems.length > 0 ? "alert" : "muted",
+      ),
+      renderStatusChip("runs", String(summary.totals.runs), "data"),
+      activeWorker
+        ? renderStatusChip("worker", activeWorker.workerName, "pulse")
+        : renderStatusChip("worker", "idle", "muted"),
+    ].join("  ");
+    return [
+      truncateToWidth(topLine, width),
+      truncateToWidth(operatorColors.border("-".repeat(Math.max(0, width))), width),
+      truncateToWidth(stats, width),
+    ];
   }
 
   private renderTasksPane(width: number): string[] {
-    const title =
-      this.selectedPane === "tasks" ? theme.bold(theme.accent("Tasks")) : theme.bold("Tasks");
+    const title = renderPanelTitle(
+      "OPERATIONS",
+      width,
+      this.selectedPane === "tasks" ? "pulse" : "data",
+    );
     const lines = [title];
     const { activeTasks } = this.snapshot!;
     if (activeTasks.length === 0) {
@@ -268,10 +323,11 @@ class ArcDashboardView implements Component {
   }
 
   private renderAttentionPane(width: number): string[] {
-    const title =
-      this.selectedPane === "attention"
-        ? theme.bold(theme.accent("Attention"))
-        : theme.bold("Attention");
+    const title = renderPanelTitle(
+      "ATTENTION",
+      width,
+      this.selectedPane === "attention" ? "alert" : "data",
+    );
     const lines = [title];
     const { attentionItems } = this.snapshot!;
     if (attentionItems.length === 0) {
@@ -304,7 +360,27 @@ class ArcDashboardView implements Component {
   }
 
   private renderDetails(width: number): string[] {
-    const lines = [theme.bold("Detail")];
+    const lines = [renderPanelTitle("SYSTEM PULSE", width, "pulse")];
+    const { summary, health, attentionItems, activeTasks } = this.snapshot!;
+    const gatewayStatus = health?.gateway?.status ?? "unknown";
+    const claudeHealth = health?.engines?.claude?.health ?? "unknown";
+    const codexHealth = health?.engines?.codex?.health ?? "unknown";
+    const activeWorker = summary.activeLanes.find((lane) => lane.status === "running");
+    lines.push(
+      truncateToWidth(
+        [
+          `gateway ${gatewayStatus}`,
+          `claude ${claudeHealth}`,
+          `codex ${codexHealth}`,
+          `active ${activeTasks.length}`,
+          `attention ${attentionItems.length}`,
+          `worker ${activeWorker?.workerName ?? "idle"}`,
+        ].join(" | "),
+        width,
+      ),
+      "",
+      renderPanelTitle("DETAIL", width, "data"),
+    );
     const selectedTask =
       this.selectedPane === "tasks"
         ? (this.snapshot!.activeTasks.find((task) => task.id === this.selectedTaskId) ?? null)
@@ -352,7 +428,7 @@ class ArcDashboardView implements Component {
       lines.push(theme.dim("Select a task or attention item."));
     }
 
-    lines.push("", theme.bold("Recent runs"));
+    lines.push("", renderPanelTitle("RECENT RUNS", width, "data"));
     const recentRuns = this.snapshot!.summary.recentRuns.slice(0, 3);
     if (recentRuns.length === 0) {
       lines.push(theme.dim("  No runs recorded yet."));
@@ -419,35 +495,45 @@ class ArcDashboardView implements Component {
   }
 }
 
-export function renderArcDashboardForTest(input: ArcDashboardRenderInput): string[] {
-  const reviews = input.reviews.filter((review) =>
-    input.tasks.some((task) => task.id === review.taskId),
-  );
-  const activeTasks = input.tasks.filter((task) =>
+function buildDashboardSnapshot(
+  repoRoot: string,
+  summary: CodeCockpitWorkspaceSummary,
+  tasks: CodeTask[],
+  reviews: CodeReviewRequest[],
+  health: HealthcheckPayload | null,
+): DashboardSnapshot {
+  const scopedReviews = reviews.filter((review) => tasks.some((task) => task.id === review.taskId));
+  const activeTasks = tasks.filter((task) =>
     ["queued", "planning", "in_progress"].includes(task.status),
   );
-  const blockedTasks = input.tasks.filter((task) => task.status === "blocked");
+  const blockedTasks = tasks.filter((task) => task.status === "blocked");
   const attentionItems: AttentionItem[] = [
-    ...reviews
+    ...scopedReviews
       .filter((review) => review.status === "pending")
       .map((review) => ({ kind: "review" as const, id: review.id, review })),
     ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
   ];
+  return {
+    repoRoot,
+    summary,
+    tasks,
+    reviews: scopedReviews,
+    activeTasks,
+    attentionItems,
+    health,
+  };
+}
+
+export function renderArcDashboardForTest(input: ArcDashboardRenderInput): string[] {
   const view = new ArcDashboardView({
     onRefresh: () => undefined,
     onNewTask: () => undefined,
     onResolveReview: () => undefined,
     onQuit: () => undefined,
   });
-  view.setSnapshot({
-    repoRoot: input.repoRoot,
-    summary: input.summary,
-    tasks: input.tasks,
-    reviews,
-    activeTasks,
-    attentionItems,
-    health: input.health,
-  });
+  view.setSnapshot(
+    buildDashboardSnapshot(input.repoRoot, input.summary, input.tasks, input.reviews, input.health),
+  );
   view.setStatusMessage(input.statusMessage ?? "Ready.");
   return view.render(input.width);
 }
@@ -463,8 +549,20 @@ async function callDashboardGateway<T>(method: string, params: Record<string, un
 }
 
 async function readHealthcheck(repoRoot: string): Promise<HealthcheckPayload | null> {
-  const scriptPath = path.join(repoRoot, "scripts", "arc-self-drive", "healthcheck.sh");
-  const result = await runCommandWithTimeout(["bash", scriptPath], {
+  const remoteTarget = process.env.ARC_REMOTE_SSH_TARGET?.trim();
+  const remoteRepoRoot = process.env.ARC_REMOTE_REPO_ROOT?.trim();
+  const remoteIdentity = process.env.ARC_REMOTE_SSH_IDENTITY?.trim();
+  const command =
+    remoteTarget && remoteRepoRoot
+      ? [
+          "ssh",
+          ...(remoteIdentity ? ["-i", remoteIdentity] : []),
+          remoteTarget,
+          "bash",
+          path.join(remoteRepoRoot, "scripts", "arc-self-drive", "healthcheck.sh"),
+        ]
+      : ["bash", path.join(repoRoot, "scripts", "arc-self-drive", "healthcheck.sh")];
+  const result = await runCommandWithTimeout(command, {
     timeoutMs: 15_000,
     cwd: repoRoot,
     env: process.env,
@@ -483,41 +581,14 @@ async function loadDashboardSnapshot(
   repoRoot: string,
   health: HealthcheckPayload | null,
 ): Promise<DashboardSnapshot> {
-  const [summary, taskPayload, reviewPayload] = await Promise.all([
-    callDashboardGateway<CodeCockpitWorkspaceSummary>("code.cockpit.summary"),
-    callDashboardGateway<TaskListPayload>("code.task.list", { repoRoot }),
-    callDashboardGateway<ReviewListPayload>("code.review.list", {}),
-  ]);
-  const tasks = taskPayload.tasks.filter((task) => task.repoRoot === repoRoot);
-  const reviews = reviewPayload.reviews.filter((review) =>
-    tasks.some((task) => task.id === review.taskId),
-  );
-  const activeTasks = tasks.filter((task) =>
-    ["queued", "planning", "in_progress"].includes(task.status),
-  );
-  const blockedTasks = tasks.filter((task) => task.status === "blocked");
-  const attentionItems: AttentionItem[] = [
-    ...reviews
-      .filter((review) => review.status === "pending")
-      .map((review) => ({ kind: "review" as const, id: review.id, review })),
-    ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
-  ];
-  return {
+  const payload = await callDashboardGateway<DashboardPayload>("code.cockpit.dashboard", {
     repoRoot,
-    summary,
-    tasks,
-    reviews,
-    activeTasks,
-    attentionItems,
-    health,
-  };
+  });
+  return buildDashboardSnapshot(repoRoot, payload.summary, payload.tasks, payload.reviews, health);
 }
 
-async function nudgeSupervisor() {
-  await runCommandWithTimeout(["systemctl", "--user", "start", "arc-self-drive.service"], {
-    timeoutMs: 10_000,
-    env: process.env,
-  }).catch(() => undefined);
+async function nudgeSupervisor(repoRoot: string) {
+  await callDashboardGateway("code.supervisor.tick", { repoRoot }).catch(() => undefined);
 }
 
 export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
@@ -557,7 +628,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
   root.addChild(footer);
   tui.addChild(root);
   tui.setFocus(dashboard);
-  header.setText(theme.header(`Arc · ${shortenHomePath(repoRoot)}`));
+  header.setText(theme.dim("Local dashboard · remote Arc runtime"));
   footer.setText(theme.dim("Arc stays live on the VPS after you quit this dashboard."));
 
   const setFooter = (message: string) => {
@@ -620,7 +691,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
           lastHealthcheckAt = nowMs;
         }
         const snapshot = await loadDashboardSnapshot(repoRoot, cachedHealth);
-        header.setText(theme.header(`Arc · ${shortenHomePath(repoRoot)}`));
+        header.setText(theme.dim("Local dashboard · remote Arc runtime"));
         dashboard.setSnapshot(snapshot);
         dashboard.setStatusMessage(
           `Ready. ${snapshot.activeTasks.length} active tasks · ${snapshot.attentionItems.length} items need attention.`,
@@ -648,7 +719,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     tui.requestRender();
     try {
       await callDashboardGateway("code.review.status", { reviewId, status });
-      await nudgeSupervisor();
+      await nudgeSupervisor(repoRoot);
       await refresh(`Review ${reviewId} marked ${status}.`);
     } catch (error) {
       dashboard.setStatusMessage(
@@ -671,7 +742,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
       tui.requestRender();
       try {
         await callDashboardGateway("code.task.add", { title, repoRoot });
-        await nudgeSupervisor();
+        await nudgeSupervisor(repoRoot);
         await refresh(`Queued "${title}". Arc will pick it up on the VPS.`);
       } catch (error) {
         dashboard.setStatusMessage(
@@ -707,7 +778,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
   await refresh();
   refreshTimer = setInterval(() => {
     void refresh();
-  }, 5_000);
+  }, DASHBOARD_REFRESH_INTERVAL_MS);
 
   await new Promise<void>((resolve) => {
     resolveExit = resolve;

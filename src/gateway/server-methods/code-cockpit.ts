@@ -77,6 +77,30 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
       async () => await getCodeCockpitRuntime().getWorkspaceSummary(),
     );
   },
+  "code.cockpit.dashboard": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () => {
+      const runtime = getCodeCockpitRuntime();
+      const repoRoot = optionalRepoRoot(params.repoRoot);
+      const [summary, taskPayload, reviewPayload] = await Promise.all([
+        runtime.getWorkspaceSummary(),
+        runtime.listTasks({ repoRoot }),
+        runtime.listReviews({}),
+      ]);
+      const tasks =
+        repoRoot === undefined
+          ? taskPayload.tasks
+          : taskPayload.tasks.filter((task) => task.repoRoot === repoRoot);
+      const taskIds = new Set(tasks.map((task) => task.id));
+      const reviews = reviewPayload.reviews.filter((review) => taskIds.has(review.taskId));
+      return {
+        storePath: summary.storePath,
+        repoRoot: repoRoot ?? "",
+        summary,
+        tasks,
+        reviews,
+      };
+    });
+  },
   "code.task.add": async ({ params, respond }) => {
     await withRuntimeResult(
       respond,
