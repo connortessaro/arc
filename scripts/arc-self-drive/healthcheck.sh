@@ -3,6 +3,21 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+ENGINE_CHECK_TIMEOUT_SECONDS="${ARC_SELF_DRIVE_ENGINE_CHECK_TIMEOUT_SECONDS:-5}"
+
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+    return
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$seconds" "$@"
+    return
+  fi
+  "$@"
+}
 
 # shellcheck source=./load-engine-env.sh
 source "$ROOT_DIR/scripts/arc-self-drive/load-engine-env.sh"
@@ -22,8 +37,14 @@ fi
 codex_path="$(command -v codex || true)"
 codex_health="missing"
 if [[ -n "$codex_path" ]]; then
-  if codex login status >/dev/null 2>&1; then
+  set +e
+  run_with_timeout "$ENGINE_CHECK_TIMEOUT_SECONDS" codex login status >/dev/null 2>&1
+  codex_auth_exit=$?
+  set -e
+  if [[ "$codex_auth_exit" -eq 0 ]]; then
     codex_health="healthy"
+  elif [[ "$codex_auth_exit" -eq 124 ]]; then
+    codex_health="timeout"
   else
     codex_health="unhealthy"
   fi
@@ -32,12 +53,17 @@ fi
 claude_path="$(command -v claude || true)"
 claude_health="missing"
 if [[ -n "$claude_path" ]]; then
-  claude_auth_status="$(claude auth status 2>/dev/null || true)"
+  set +e
+  claude_auth_status="$(run_with_timeout "$ENGINE_CHECK_TIMEOUT_SECONDS" claude auth status 2>/dev/null)"
+  claude_auth_exit=$?
+  set -e
   if [[ "$claude_auth_status" =~ \"loggedIn\"[[:space:]]*:[[:space:]]*true ]]; then
     claude_health="healthy"
   elif [[ "$claude_auth_status" =~ \"loggedIn\"[[:space:]]*:[[:space:]]*false ]]; then
     claude_health="missing"
-  elif claude --version >/dev/null 2>&1; then
+  elif [[ "$claude_auth_exit" -eq 124 ]]; then
+    claude_health="timeout"
+  elif run_with_timeout "$ENGINE_CHECK_TIMEOUT_SECONDS" claude --version >/dev/null 2>&1; then
     claude_health="installed"
   else
     claude_health="unhealthy"
