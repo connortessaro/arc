@@ -59,31 +59,40 @@ resolve_upstream() {
 repair_registry_package() {
   local package_name="$1"
   local encoded_name="${package_name//\//+}"
+  local top_level_target top_level_target_resolved preferred_package_dir=""
   local package_matches
   package_matches="$(find "$ROOT_DIR/node_modules/.pnpm" -maxdepth 1 -type d -name "${encoded_name}@*" | sort || true)"
 
   [[ -n "$package_matches" ]] || return 0
 
+  top_level_target="$ROOT_DIR/node_modules/$package_name"
+  if [[ -L "$top_level_target" ]]; then
+    top_level_target_resolved="$(readlink -f "$top_level_target" 2>/dev/null || true)"
+  else
+    top_level_target_resolved=""
+  fi
+
   while IFS= read -r package_dir; do
     [[ -n "$package_dir" ]] || continue
+    if [[ -n "$top_level_target_resolved" && "$top_level_target_resolved" == "$package_dir/node_modules/$package_name" ]]; then
+      preferred_package_dir="$package_dir"
+    fi
 
     local package_base package_suffix package_version archive_path
     package_base="$(basename "$package_dir")"
     package_suffix="${package_base#${encoded_name}@}"
     package_version="${package_suffix%%_*}"
     archive_path="$(npm pack "${package_name}@${package_version}" --silent | tail -n 1)"
-    tar -xzf "$archive_path"
     rm -rf "$package_dir/node_modules/$package_name"
-    mkdir -p "$(dirname "$package_dir/node_modules/$package_name")"
     mkdir -p "$package_dir/node_modules/$package_name"
-    cp -R package/. "$package_dir/node_modules/$package_name/"
-    rm -rf package "$archive_path"
+    tar -xzf "$archive_path" --strip-components=1 -C "$package_dir/node_modules/$package_name"
+    rm -f "$archive_path"
   done <<< "$package_matches"
 
-  local first_package_dir
-  first_package_dir="$(printf '%s\n' "$package_matches" | head -n 1)"
+  local selected_package_dir
+  selected_package_dir="${preferred_package_dir:-$(printf '%s\n' "$package_matches" | head -n 1)}"
   mkdir -p "$(dirname "$ROOT_DIR/node_modules/$package_name")"
-  ln -sfn "$first_package_dir/node_modules/$package_name" "$ROOT_DIR/node_modules/$package_name"
+  ln -sfn "$selected_package_dir/node_modules/$package_name" "$ROOT_DIR/node_modules/$package_name"
 }
 
 repair_broken_registry_packages() {
