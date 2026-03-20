@@ -115,7 +115,7 @@ describe("arc dashboard renderer", () => {
           codex: { health: "healthy" },
         },
       },
-      statusMessage: "Ready. 1 active tasks · 1 items need attention.",
+      statusMessage: "Ready. 1 active · 1 reviews · 0 blocked.",
     });
 
     const rendered = lines.join("\n");
@@ -140,10 +140,100 @@ describe("arc dashboard renderer", () => {
           codex: { health: "healthy" },
         },
       },
-      statusMessage: "Ready. 0 active tasks · 1 items need attention.",
+      statusMessage: "Ready. 0 active · 1 reviews · 0 blocked.",
     });
 
     const overflow = lines.find((line) => visibleWidth(line) > 158);
+    expect(
+      overflow,
+      overflow ? `overflowed line (${visibleWidth(overflow)}): ${overflow}` : "",
+    ).toBeUndefined();
+  });
+
+  it("renders blocked tasks in a dedicated BLOCKED pane", () => {
+    const blockedTask = makeTask({
+      id: "task_blocked_1",
+      title: "deploy failing on staging",
+      status: "blocked",
+      blockReason: "spawn-error",
+      goal: "Fix deployment pipeline.",
+    });
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" }), blockedTask],
+      reviews: [makeReview()],
+      health: {
+        gateway: { status: "active", port: "18789", health: { ok: true, status: "live" } },
+        engines: {
+          claude: { health: "healthy" },
+          codex: { health: "healthy" },
+        },
+      },
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("BLOCKED");
+    expect(rendered).toContain("spawn-error");
+    expect(rendered).toContain("deploy failing on staging");
+  });
+
+  it("shows blockReason in the detail panel for blocked tasks", () => {
+    const blockedTask = makeTask({
+      id: "task_blocked_2",
+      title: "auth service down",
+      status: "blocked",
+      blockReason: "no-healthy-engine",
+      goal: "Investigate auth outage.",
+    });
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [blockedTask],
+      reviews: [],
+      health: null,
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("BLOCKED");
+    expect(rendered).toContain("no-healthy-engine");
+  });
+
+  it("does not show BLOCKED pane when there are no blocked tasks", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [makeReview()],
+      health: null,
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("OPERATIONS");
+    expect(rendered).toContain("ATTENTION");
+    expect(rendered).not.toContain("[BLOCKED]");
+  });
+
+  it("keeps lines within width when blocked pane is shown", () => {
+    const blockedTask = makeTask({
+      id: "task_blocked_3",
+      title: "a very long task title that might overflow the terminal width boundary",
+      status: "blocked",
+      blockReason: "draft-pr-failed",
+    });
+    const lines = renderArcDashboardForTest({
+      width: 120,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" }), blockedTask],
+      reviews: [makeReview()],
+      health: null,
+    });
+
+    const overflow = lines.find((line) => visibleWidth(line) > 120);
     expect(
       overflow,
       overflow ? `overflowed line (${visibleWidth(overflow)}): ${overflow}` : "",
