@@ -133,6 +133,8 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
+systemctl --user stop openclaw-gateway.service arc-self-drive.service arc-self-drive.timer >/dev/null 2>&1 || true
+
 pnpm --dir "$ROOT_DIR" install --frozen-lockfile --force
 repair_broken_registry_packages
 pnpm --dir "$ROOT_DIR" build
