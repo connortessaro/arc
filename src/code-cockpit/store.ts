@@ -32,6 +32,7 @@ export const CODE_WORKER_STATUSES = [
 export const CODE_WORKER_LANES = ["worker", "review"] as const;
 export const CODE_WORKER_ENGINE_IDS = ["codex", "claude"] as const;
 export const CODE_WORKER_AUTH_HEALTHS = ["unknown", "healthy", "expired", "missing"] as const;
+export const CODE_PULL_REQUEST_STATES = ["draft", "open", "merged", "closed"] as const;
 
 export const CODE_REVIEW_STATUSES = [
   "pending",
@@ -50,6 +51,7 @@ export type CodeWorkerStatus = (typeof CODE_WORKER_STATUSES)[number];
 export type CodeWorkerLane = (typeof CODE_WORKER_LANES)[number];
 export type CodeWorkerEngineId = (typeof CODE_WORKER_ENGINE_IDS)[number];
 export type CodeWorkerAuthHealth = (typeof CODE_WORKER_AUTH_HEALTHS)[number];
+export type CodePullRequestState = (typeof CODE_PULL_REQUEST_STATES)[number];
 export type CodeReviewStatus = (typeof CODE_REVIEW_STATUSES)[number];
 export type CodeContextSnapshotKind = (typeof CODE_CONTEXT_SNAPSHOT_KINDS)[number];
 export type CodeRunStatus = (typeof CODE_RUN_STATUSES)[number];
@@ -85,6 +87,11 @@ export type CodeWorkerSession = {
   authHealth?: CodeWorkerAuthHealth;
   lastAuthCheckedAt?: string;
   lastCommitHash?: string;
+  pushedBranch?: string;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+  pullRequestState?: CodePullRequestState;
+  pullRequestError?: string;
   scopeKey?: string;
   activeRunId?: string;
   threadId?: string;
@@ -302,6 +309,11 @@ export type UpdateCodeWorkerSessionInput = {
   authHealth?: CodeWorkerAuthHealth | null;
   lastAuthCheckedAt?: string | null;
   lastCommitHash?: string | null;
+  pushedBranch?: string | null;
+  pullRequestNumber?: number | null;
+  pullRequestUrl?: string | null;
+  pullRequestState?: CodePullRequestState | null;
+  pullRequestError?: string | null;
   scopeKey?: string | null;
   activeRunId?: string | null;
   threadId?: string | null;
@@ -508,6 +520,15 @@ function assertWorkerAuthHealth(value: string): CodeWorkerAuthHealth {
   }
   throw new Error(
     `Invalid worker auth health "${value}". Expected one of: ${CODE_WORKER_AUTH_HEALTHS.join(", ")}`,
+  );
+}
+
+function assertPullRequestState(value: string): CodePullRequestState {
+  if ((CODE_PULL_REQUEST_STATES as readonly string[]).includes(value)) {
+    return value as CodePullRequestState;
+  }
+  throw new Error(
+    `Invalid pull request state "${value}". Expected one of: ${CODE_PULL_REQUEST_STATES.join(", ")}`,
   );
 }
 
@@ -768,6 +789,27 @@ export async function updateCodeWorkerSession(
     const lastCommitHash = normalizePatchString(patch.lastCommitHash);
     if (lastCommitHash !== undefined) {
       worker.lastCommitHash = lastCommitHash ?? undefined;
+    }
+    const pushedBranch = normalizePatchString(patch.pushedBranch);
+    if (pushedBranch !== undefined) {
+      worker.pushedBranch = pushedBranch ?? undefined;
+    }
+    if (patch.pullRequestNumber !== undefined) {
+      worker.pullRequestNumber =
+        patch.pullRequestNumber === null ? undefined : patch.pullRequestNumber;
+    }
+    const pullRequestUrl = normalizePatchString(patch.pullRequestUrl);
+    if (pullRequestUrl !== undefined) {
+      worker.pullRequestUrl = pullRequestUrl ?? undefined;
+    }
+    if (patch.pullRequestState !== undefined) {
+      worker.pullRequestState = patch.pullRequestState
+        ? assertPullRequestState(patch.pullRequestState)
+        : undefined;
+    }
+    const pullRequestError = normalizePatchString(patch.pullRequestError);
+    if (pullRequestError !== undefined) {
+      worker.pullRequestError = pullRequestError ?? undefined;
     }
     const scopeKey = normalizePatchString(patch.scopeKey);
     if (scopeKey !== undefined) {

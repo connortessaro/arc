@@ -33,6 +33,33 @@ auth_env_exists=false
 if [[ -f "$auth_env_file" ]]; then
   auth_env_exists=true
 fi
+github_base_branch="${ARC_SELF_DRIVE_BASE_BRANCH:-$(git -C "$ROOT_DIR" config --get arc.selfDriveBaseBranch 2>/dev/null || true)}"
+github_remote="${ARC_SELF_DRIVE_GITHUB_REMOTE:-origin}"
+github_push_url="$(git -C "$ROOT_DIR" config --get "remote.${github_remote}.pushurl" 2>/dev/null || true)"
+github_token_configured=false
+if [[ -n "${ARC_SELF_DRIVE_GITHUB_TOKEN:-}" ]]; then
+  github_token_configured=true
+fi
+gh_path="$(command -v gh || true)"
+github_health="missing"
+if [[ -n "$gh_path" ]]; then
+  if [[ "$github_token_configured" == true ]]; then
+    set +e
+    GH_TOKEN="${ARC_SELF_DRIVE_GITHUB_TOKEN:-}" run_with_timeout "$ENGINE_CHECK_TIMEOUT_SECONDS" \
+      gh auth status --hostname github.com >/dev/null 2>&1
+    github_auth_exit=$?
+    set -e
+    if [[ "$github_auth_exit" -eq 0 ]]; then
+      github_health="healthy"
+    elif [[ "$github_auth_exit" -eq 124 ]]; then
+      github_health="timeout"
+    else
+      github_health="unhealthy"
+    fi
+  else
+    github_health="installed"
+  fi
+fi
 
 codex_path="$(command -v codex || true)"
 codex_health="missing"
@@ -82,6 +109,11 @@ jq -n \
   --arg gatewayPort "$PORT" \
   --arg authEnvFile "$auth_env_file" \
   --argjson authEnvExists "$auth_env_exists" \
+  --arg ghPath "$gh_path" \
+  --arg githubHealth "$github_health" \
+  --arg githubBaseBranch "$github_base_branch" \
+  --arg githubPushUrl "$github_push_url" \
+  --argjson githubTokenConfigured "$github_token_configured" \
   --arg codexPath "$codex_path" \
   --arg codexHealth "$codex_health" \
   --arg claudePath "$claude_path" \
@@ -97,6 +129,13 @@ jq -n \
     authEnvFile: {
       path: $authEnvFile,
       exists: $authEnvExists
+    },
+    github: {
+      path: ($ghPath | select(. != "")),
+      health: $githubHealth,
+      tokenConfigured: $githubTokenConfigured,
+      baseBranch: ($githubBaseBranch | select(. != "")),
+      pushUrl: ($githubPushUrl | select(. != ""))
     },
     engines: {
       codex: {

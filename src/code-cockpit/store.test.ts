@@ -136,6 +136,10 @@ describe("code cockpit store", () => {
     await storeModule.updateCodeWorkerSession(worker.id, {
       lastAuthCheckedAt: "2026-03-19T12:00:00.000Z",
       lastCommitHash: "abc1234",
+      pushedBranch: "code/task_123/reviewer",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.com/connortessaro/arc/pull/42",
+      pullRequestState: "draft",
     });
 
     const store = await storeModule.loadCodeCockpitStore();
@@ -151,6 +155,10 @@ describe("code cockpit store", () => {
           authHealth: "healthy",
           lastAuthCheckedAt: "2026-03-19T12:00:00.000Z",
           lastCommitHash: "abc1234",
+          pushedBranch: "code/task_123/reviewer",
+          pullRequestNumber: 42,
+          pullRequestUrl: "https://github.com/connortessaro/arc/pull/42",
+          pullRequestState: "draft",
         }),
       ]),
     );
