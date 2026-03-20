@@ -25,6 +25,7 @@ Usage:
   arc status                Show gateway, engine, and queue status
   arc do "<goal>"           Queue a new task for ${DEFAULT_REPO_ROOT}
   arc tasks [args...]       List tasks through the live gateway
+  arc blocked [args...]     List blocked tasks that need intervention
   arc reviews [args...]     List reviews through the live gateway
   arc approve <review-id>   Approve a review and resume the queue
   arc reject <review-id>    Request changes on a review and resume the queue
@@ -127,6 +128,9 @@ case "$command_name" in
     ;;
   tasks)
     run_code task list --repo "${DEFAULT_REPO_ROOT}" "$@"
+    ;;
+  blocked)
+    run_code task list --repo "${DEFAULT_REPO_ROOT}" --status blocked "$@"
     ;;
   task)
     subcommand="${1:-}"

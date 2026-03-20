@@ -303,6 +303,7 @@ describe("code cockpit runtime", () => {
     await expect(runGit(["branch", "--show-current"], worktreePath)).resolves.toBe(
       `code/${task.id}/planner`,
     );
+    await fs.writeFile(path.join(worktreePath, "PLAN.md"), "worker output\n", "utf8");
 
     pendingRuns[0]?.deferred.resolve({
       reason: "exit",
@@ -333,10 +334,12 @@ describe("code cockpit runtime", () => {
       threadId: "thread-123",
       lastExitReason: "succeeded",
     });
+    expect(nextWorker?.lastCommitHash).toMatch(/^[0-9a-f]{40}$/);
     expect(nextTask).toMatchObject({
       status: "done",
     });
     expect(nextWorker?.activeRunId).toBeUndefined();
+    await expect(runGit(["rev-list", "--count", "HEAD"], worktreePath)).resolves.toBe("2");
     expect(
       refreshed.reviews.some((entry) => entry.workerId === worker.id && entry.status === "pending"),
     ).toBe(false);
@@ -496,7 +499,7 @@ describe("code cockpit runtime", () => {
       repoRoot: tempRepoRoot,
       objective: "Review the current implementation and propose fixes",
       engineId: "claude",
-      engineModel: "claude-sonnet-4-6",
+      engineModel: "claude-opus-4-6",
     });
 
     const runtime = createCodeCockpitRuntime({
@@ -521,7 +524,7 @@ describe("code cockpit runtime", () => {
     const started = await runtime.startWorker({ workerId: worker.id });
 
     expect(started.worker.engineId).toBe("claude");
-    expect(started.worker.engineModel).toBe("claude-sonnet-4-6");
+    expect(started.worker.engineModel).toBe("claude-opus-4-6");
     expect(started.worker.backendId).toBe("claude-cli");
     expect(started.worker.commandPath).toBe("claude");
     expect(pendingRuns).toHaveLength(1);
@@ -536,7 +539,7 @@ describe("code cockpit runtime", () => {
       ]),
     );
     expect(pendingRuns[0]?.input.argv).toEqual(
-      expect.arrayContaining(["--model", "claude-sonnet-4-6"]),
+      expect.arrayContaining(["--model", "claude-opus-4-6"]),
     );
     expect(pendingRuns[0]?.input.argv.at(-1)).toContain("Review the current implementation");
 
@@ -568,7 +571,7 @@ describe("code cockpit runtime", () => {
     expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
       status: "completed",
       engineId: "claude",
-      engineModel: "claude-sonnet-4-6",
+      engineModel: "claude-opus-4-6",
       backendId: "claude-cli",
       commandPath: "claude",
       threadId: "claude-session-123",
@@ -826,7 +829,7 @@ describe("code cockpit runtime", () => {
     });
     expect(result.worker).toMatchObject({
       engineId: "claude",
-      engineModel: "claude-sonnet-4-6",
+      engineModel: "claude-opus-4-6",
     });
     expect(pendingRuns).toHaveLength(1);
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["claude", "-p"]));
@@ -918,7 +921,7 @@ describe("code cockpit runtime", () => {
     expect(result.action).toBe("started");
     expect(result.worker).toMatchObject({
       engineId: "claude",
-      engineModel: "claude-sonnet-4-6",
+      engineModel: "claude-opus-4-6",
       backendId: "claude-cli",
       authHealth: "healthy",
     });
