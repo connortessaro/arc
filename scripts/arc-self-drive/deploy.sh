@@ -57,6 +57,7 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 pnpm --dir "$ROOT_DIR" install --frozen-lockfile
+pnpm --dir "$ROOT_DIR" build
 bash "$ROOT_DIR/scripts/arc-self-drive/install-systemd.sh" >/dev/null
 
 deadline=$((SECONDS + WAIT_TIMEOUT_SECONDS))

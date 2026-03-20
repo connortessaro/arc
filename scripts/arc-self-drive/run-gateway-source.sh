@@ -8,7 +8,7 @@ PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 source "$ROOT_DIR/scripts/arc-self-drive/load-engine-env.sh"
 load_arc_self_drive_env
 
-export PATH="$ROOT_DIR/node_modules/.bin:$PATH"
+export PATH="${HOME}/.npm-global/bin:${HOME}/.local/bin:${PATH}"
 
 cd "$ROOT_DIR"
-exec node --import tsx "$ROOT_DIR/src/index.ts" gateway --port "$PORT"
+exec node "$ROOT_DIR/openclaw.mjs" gateway --port "$PORT"
