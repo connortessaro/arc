@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { runCodeCockpitTui } from "../code-cockpit/tui.js";
 import {
   codeDecisionAddCommand,
   codeDecisionListCommand,
@@ -71,6 +70,7 @@ export function registerCodeCli(program: Command) {
     .option("--repo <path>", "Repository root to manage")
     .action(async (opts) => {
       try {
+        const { runCodeCockpitTui } = await import("../code-cockpit/tui.js");
         await runCodeCockpitTui({
           repoRoot: typeof opts.repo === "string" ? opts.repo.trim() || undefined : undefined,
         });

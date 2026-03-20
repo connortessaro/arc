@@ -24,9 +24,12 @@ GATEWAY_TOKEN="$(
   python3 - <<'PY'
 from pathlib import Path
 import json
+import os
 
-config_path = Path.home() / ".openclaw" / "openclaw.json"
-env_path = Path.home() / ".openclaw" / ".env"
+state_dir = Path(os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw"))).expanduser()
+config_override = os.environ.get("OPENCLAW_CONFIG_PATH")
+config_path = Path(config_override).expanduser() if config_override else state_dir / "openclaw.json"
+env_path = state_dir / ".env"
 
 token = ""
 if config_path.exists():
@@ -50,16 +53,16 @@ print(token)
 PY
 )"
 
-TEMP_STATE_DIR="$(mktemp -d)"
+TEMP_CONFIG_DIR="$(mktemp -d)"
 
 cleanup() {
-  rm -rf "$TEMP_STATE_DIR"
+  rm -rf "$TEMP_CONFIG_DIR"
 }
 
 trap cleanup EXIT
 
 if [[ -n "$GATEWAY_TOKEN" ]]; then
-  cat > "${TEMP_STATE_DIR}/openclaw.json" <<EOF
+  cat > "${TEMP_CONFIG_DIR}/openclaw.json" <<EOF
 {
   "gateway": {
     "mode": "remote",
@@ -71,7 +74,7 @@ if [[ -n "$GATEWAY_TOKEN" ]]; then
 }
 EOF
 else
-  cat > "${TEMP_STATE_DIR}/openclaw.json" <<EOF
+  cat > "${TEMP_CONFIG_DIR}/openclaw.json" <<EOF
 {
   "gateway": {
     "mode": "remote",
@@ -84,5 +87,5 @@ EOF
 fi
 
 cd "$ROOT_DIR"
-OPENCLAW_STATE_DIR="$TEMP_STATE_DIR" \
+OPENCLAW_CONFIG_PATH="${TEMP_CONFIG_DIR}/openclaw.json" \
   node --import tsx "${ROOT_DIR}/scripts/arc-self-drive/code-cli-entry.ts" "$@"

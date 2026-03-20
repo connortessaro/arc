@@ -58,6 +58,22 @@ def main() -> None:
 
     claude = cli_backends.setdefault("claude-cli", {})
     claude["command"] = pick_command("~/.npm-global/bin/claude", "claude")
+    claude["args"] = [
+        "-p",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "bypassPermissions",
+    ]
+    claude["resumeArgs"] = [
+        "-p",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "bypassPermissions",
+        "--resume",
+        "{sessionId}",
+    ]
 
     config_path.write_text(f"{json.dumps(config, indent=2)}\n")
     print(str(config_path))

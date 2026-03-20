@@ -44,11 +44,13 @@ import {
 } from "./store.js";
 
 const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
-const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
+const DEFAULT_CLAUDE_WORKER_MODEL = "claude-opus-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
 const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
 const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
+const ARC_SELF_DRIVE_COMMITTER_NAME = "Arc Self Drive";
+const ARC_SELF_DRIVE_COMMITTER_EMAIL = "arc-self-drive@local.invalid";
 const SELF_DRIVE_POLICY =
   "You may edit files, run verification, and create local commits on your worker branch. Do not push, merge, or touch the main checkout.";
 
@@ -334,6 +336,77 @@ async function resolveBaseBranch(
     return localHead;
   }
   return "main";
+}
+
+async function resolveWorkerHeadCommit(params: {
+  runCommand: typeof runCommandWithTimeout;
+  repoRoot: string;
+  worktreePath: string;
+}): Promise<string | null> {
+  const head = await readGitValue(params.runCommand, params.worktreePath, ["rev-parse", "HEAD"]);
+  if (!head) {
+    return null;
+  }
+  const baseBranch = await resolveBaseBranch(params.runCommand, params.repoRoot);
+  const baseHead = await readGitValue(params.runCommand, params.repoRoot, [
+    "rev-parse",
+    baseBranch,
+  ]);
+  if (baseHead && baseHead === head) {
+    return null;
+  }
+  return head;
+}
+
+async function commitWorkerChanges(params: {
+  runCommand: typeof runCommandWithTimeout;
+  repoRoot: string;
+  worktreePath: string;
+  taskTitle: string;
+}): Promise<string | null> {
+  const status = await params
+    .runCommand(["git", "-C", params.worktreePath, "status", "--porcelain"], {
+      timeoutMs: 10_000,
+    })
+    .catch(() => null);
+  if (!status || status.code !== 0) {
+    return null;
+  }
+  if (!status.stdout.trim()) {
+    return await resolveWorkerHeadCommit(params);
+  }
+
+  const add = await params
+    .runCommand(["git", "-C", params.worktreePath, "add", "-A"], {
+      timeoutMs: 10_000,
+    })
+    .catch(() => null);
+  if (!add || add.code !== 0) {
+    return null;
+  }
+
+  const commit = await params
+    .runCommand(
+      [
+        "git",
+        "-C",
+        params.worktreePath,
+        "-c",
+        `user.name=${ARC_SELF_DRIVE_COMMITTER_NAME}`,
+        "-c",
+        `user.email=${ARC_SELF_DRIVE_COMMITTER_EMAIL}`,
+        "commit",
+        "-m",
+        `arc: ${params.taskTitle.trim() || "complete task"}`,
+      ],
+      { timeoutMs: 20_000 },
+    )
+    .catch(() => null);
+  if (!commit || commit.code !== 0) {
+    return await resolveWorkerHeadCommit(params);
+  }
+
+  return await readGitValue(params.runCommand, params.worktreePath, ["rev-parse", "HEAD"]);
 }
 
 async function branchExists(
@@ -788,10 +861,13 @@ class CodeCockpitRuntime {
   private async finalizeWorkerRun(params: {
     workerId: string;
     taskId: string;
+    taskTitle: string;
     localRunId: string;
     engine: WorkerEngineAdapter;
     modelId: string;
     preparedBackend: PreparedBackend;
+    repoRoot: string;
+    worktreePath: string;
     existingThreadId?: string;
     useResume: boolean;
     exit: RunExit;
@@ -846,6 +922,12 @@ class CodeCockpitRuntime {
     }
 
     if (params.exit.reason === "exit" && params.exit.exitCode === 0) {
+      const lastCommitHash = await commitWorkerChanges({
+        runCommand: this.runCommandWithTimeout,
+        repoRoot: params.repoRoot,
+        worktreePath: params.worktreePath,
+        taskTitle: params.taskTitle,
+      });
       await updateCodeRun(params.localRunId, {
         status: "succeeded",
         finishedAt,
@@ -866,6 +948,7 @@ class CodeCockpitRuntime {
         authHealth: finishedAuthHealth,
         lastAuthCheckedAt: finishedAt,
         threadId: threadId ?? null,
+        lastCommitHash: lastCommitHash ?? null,
         lastExitedAt: finishedAt,
         lastExitReason: "succeeded",
       });
@@ -1046,10 +1129,13 @@ class CodeCockpitRuntime {
           await this.finalizeWorkerRun({
             workerId: worker.id,
             taskId: task.id,
+            taskTitle: task.title,
             localRunId: queuedRun.id,
             engine,
             modelId,
             preparedBackend,
+            repoRoot,
+            worktreePath: ensured.worktreePath,
             existingThreadId: worker.threadId,
             useResume,
             exit,
@@ -1059,10 +1145,13 @@ class CodeCockpitRuntime {
           await this.finalizeWorkerRun({
             workerId: worker.id,
             taskId: task.id,
+            taskTitle: task.title,
             localRunId: queuedRun.id,
             engine,
             modelId,
             preparedBackend,
+            repoRoot,
+            worktreePath: ensured.worktreePath,
             existingThreadId: worker.threadId,
             useResume,
             exit: {
