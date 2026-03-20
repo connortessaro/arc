@@ -179,6 +179,97 @@ function createRunCommandWithEngineHealthStub(params: {
   };
 }
 
+function createRunCommandWithDraftPrStub(params?: {
+  failOnCreate?: boolean;
+  existingPr?: {
+    number: number;
+    url: string;
+    isDraft: boolean;
+    state: string;
+  } | null;
+}) {
+  const calls: string[][] = [];
+  const existingPr = params?.existingPr ?? null;
+  let createdPr: {
+    number: number;
+    url: string;
+    isDraft: boolean;
+    state: string;
+  } | null = null;
+
+  const stub = async (
+    argv: string[],
+    optionsOrTimeout: number | { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
+  ) => {
+    calls.push(argv);
+    if (argv[0] === "git" && argv.includes("push")) {
+      return {
+        pid: undefined,
+        stdout: "pushed\n",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    }
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "view") {
+      const pr = createdPr ?? existingPr;
+      if (!pr) {
+        return {
+          pid: undefined,
+          stdout: "",
+          stderr: "no pull requests found for branch",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      return {
+        pid: undefined,
+        stdout: JSON.stringify(pr),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    }
+    if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "create") {
+      if (params?.failOnCreate) {
+        return {
+          pid: undefined,
+          stdout: "",
+          stderr: "draft PR creation failed",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      createdPr = {
+        number: 42,
+        url: "https://github.com/connortessaro/arc/pull/42",
+        isDraft: true,
+        state: "OPEN",
+      };
+      return {
+        pid: undefined,
+        stdout: `${createdPr.url}\n`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+      };
+    }
+    return await runCommandWithTimeoutStub(argv, optionsOrTimeout);
+  };
+
+  return { stub, calls };
+}
+
 async function initRepo(root: string) {
   await execFileAsync("git", ["init", "--initial-branch=main", root], { encoding: "utf8" });
   await execFileAsync("git", ["-C", root, "config", "user.name", "OpenClaw Tests"], {
@@ -425,6 +516,222 @@ describe("code cockpit runtime", () => {
       status: "succeeded",
       threadId: "thread-existing",
     });
+  });
+
+  it("pushes a successful code-changing worker branch and records the draft PR metadata", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    const { stub, calls } = createRunCommandWithDraftPrStub();
+
+    vi.stubEnv("ARC_SELF_DRIVE_GITHUB_TOKEN", "test-token");
+    vi.stubEnv("ARC_SELF_DRIVE_BASE_BRANCH", "main");
+
+    const task = await store.createCodeTask({
+      title: "Open a draft PR after a worker succeeds",
+      repoRoot: tempRepoRoot,
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "publisher",
+      objective: "Implement the publish flow",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: stub,
+    });
+
+    const started = await runtime.startWorker({ workerId: worker.id });
+    const worktreePath = path.join(tempRepoRoot, ".worktrees", "code", "publisher");
+    await fs.writeFile(path.join(worktreePath, "PLAN.md"), "publish me\n", "utf8");
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 25,
+      stdout: `${JSON.stringify({ thread_id: "thread-pr", item: { type: "assistant_message", text: "done" } })}\n`,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) =>
+            entry.id === worker.id &&
+            entry.status === "completed" &&
+            entry.pullRequestNumber === 42 &&
+            entry.pullRequestState === "draft",
+        ),
+    );
+
+    expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      status: "completed",
+      lastExitReason: "succeeded",
+      pushedBranch: `code/${task.id}/publisher`,
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.com/connortessaro/arc/pull/42",
+      pullRequestState: "draft",
+    });
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "done",
+    });
+    expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
+      status: "succeeded",
+    });
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["git", "-C", worktreePath, "push", "origin"]),
+        expect.arrayContaining(["gh", "pr", "create", "--draft", "--base", "main"]),
+      ]),
+    );
+  });
+
+  it("blocks the task when draft PR publication fails after a successful code change", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    const { stub } = createRunCommandWithDraftPrStub({ failOnCreate: true });
+
+    vi.stubEnv("ARC_SELF_DRIVE_GITHUB_TOKEN", "test-token");
+    vi.stubEnv("ARC_SELF_DRIVE_BASE_BRANCH", "main");
+
+    const task = await store.createCodeTask({
+      title: "Surface PR publication failures",
+      repoRoot: tempRepoRoot,
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "publisher-failure",
+      objective: "Create a branch that needs a draft PR",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: stub,
+    });
+
+    const started = await runtime.startWorker({ workerId: worker.id });
+    const worktreePath = path.join(tempRepoRoot, ".worktrees", "code", "publisher-failure");
+    await fs.writeFile(path.join(worktreePath, "PLAN.md"), "publish me\n", "utf8");
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 25,
+      stdout: `${JSON.stringify({ thread_id: "thread-pr-failure", item: { type: "assistant_message", text: "done" } })}\n`,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) =>
+            entry.id === worker.id &&
+            entry.status === "failed" &&
+            entry.lastExitReason === "draft-pr-failed",
+        ),
+    );
+
+    expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      status: "failed",
+      lastExitReason: "draft-pr-failed",
+      pushedBranch: `code/${task.id}/publisher-failure`,
+      pullRequestError: "draft PR creation failed",
+    });
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "blocked",
+    });
+    expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
+  it("reuses an existing draft PR instead of creating a duplicate for the same worker branch", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    const { stub, calls } = createRunCommandWithDraftPrStub({
+      existingPr: {
+        number: 84,
+        url: "https://github.com/connortessaro/arc/pull/84",
+        isDraft: true,
+        state: "OPEN",
+      },
+    });
+
+    vi.stubEnv("ARC_SELF_DRIVE_GITHUB_TOKEN", "test-token");
+    vi.stubEnv("ARC_SELF_DRIVE_BASE_BRANCH", "main");
+
+    const task = await store.createCodeTask({
+      title: "Reuse an existing draft PR",
+      repoRoot: tempRepoRoot,
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "publisher-existing-pr",
+      objective: "Continue the branch without opening a duplicate PR",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: stub,
+    });
+
+    await runtime.startWorker({ workerId: worker.id });
+    const worktreePath = path.join(tempRepoRoot, ".worktrees", "code", "publisher-existing-pr");
+    await fs.writeFile(path.join(worktreePath, "PLAN.md"), "publish me\n", "utf8");
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 25,
+      stdout: `${JSON.stringify({ thread_id: "thread-pr-existing", item: { type: "assistant_message", text: "done" } })}\n`,
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) =>
+            entry.id === worker.id &&
+            entry.status === "completed" &&
+            entry.pullRequestNumber === 84,
+        ),
+    );
+
+    expect(refreshed.workers.find((entry) => entry.id === worker.id)).toMatchObject({
+      pullRequestNumber: 84,
+      pullRequestUrl: "https://github.com/connortessaro/arc/pull/84",
+      pullRequestState: "draft",
+    });
+    expect(calls.some((argv) => argv[0] === "gh" && argv[1] === "pr" && argv[2] === "create")).toBe(
+      false,
+    );
   });
 
   it("marks failed unattended runs as blocked instead of retrying them automatically", async () => {

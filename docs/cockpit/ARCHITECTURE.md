@@ -1,16 +1,63 @@
 # Arc Architecture
 
-Arc is the product/app name. OpenClaw remains the runtime owner and control
-plane.
+Arc is the product/workstation name.
+OpenClaw remains the runtime owner and control plane.
 
 ## Goal
 
-Build a native macOS developer shell that can replace the current
-multi-terminal workflow with:
+Build a workstation that replaces the current multi-terminal, multi-window
+agent workflow with:
 
+- a global Arc home across projects
+- a project workspace focused on review and steering
 - gateway-owned background workers
-- embedded local terminal lanes
-- a review lane for logs, diffs, and tests
+- a remote ops console on the VPS
+
+## Product Shape
+
+### Arc home
+
+The top-level Arc surface should show:
+
+- projects
+- active workers across projects
+- blocked / needs-input items
+- attention queue
+
+This is the “body” layer of Arc.
+
+### Project workspace
+
+Each project workspace should center on:
+
+- review queue
+- blocked / needs-input queue
+- changed files and diffs
+- tests and logs
+- recent runs and worker summaries
+
+This is the main daily-driver surface for the human.
+
+### Worker detail
+
+Worker detail should show:
+
+- run summary
+- branch/worktree info
+- latest logs
+- control actions
+
+### TUI console
+
+The TUI should remain the fast VPS operator surface for:
+
+- health
+- queue
+- unblock / retry
+- active worker inspection
+- quick intervention
+
+It is important, but it is not the flagship product surface.
 
 ## Product Split
 
@@ -21,7 +68,7 @@ OpenClaw remains the backend owner for:
 - task, worker, run, review, and decision persistence
 - worktree creation and branch naming
 - worker lifecycle: `start`, `send`, `pause`, `resume`, `cancel`
-- gateway RPCs consumed by the native app
+- gateway RPCs consumed by the app and TUI
 
 Key files:
 
@@ -29,15 +76,15 @@ Key files:
 - `src/code-cockpit/runtime.ts`
 - `src/gateway/server-methods/code-cockpit.ts`
 
-### Native macOS Arc shell
+### Swift macOS Arc shell
 
-The macOS app is the operator surface for:
+The macOS app is the flagship Arc surface for:
 
 - project/workspace selection
-- lane layout
-- worker controls
-- log and review UX
-- future embedded terminal panes
+- review and blocked-item UX
+- worker detail
+- diffs, tests, and run summaries
+- future embedded terminal lanes
 
 Key files:
 
@@ -50,7 +97,7 @@ Key files:
 
 ### Durable entities
 
-The persisted coding cockpit store tracks:
+The persisted cockpit store tracks:
 
 - `Task`
 - `WorkerSession`
@@ -61,15 +108,15 @@ The persisted coding cockpit store tracks:
 
 ### Worker ownership
 
-Workers are gateway-owned. The native app is not allowed to become the runtime
-owner. Closing the Arc window should not terminate active workers if the
-gateway is still running.
+Workers are gateway-owned.
+The app and TUI are not allowed to become the runtime owner.
+Closing an Arc surface should not terminate active workers if the gateway is
+still running.
 
 ### Worktree model
 
-Workers are intended to run in isolated worktrees with predictable paths and
-branches. The point is to prevent worker collisions and make review/cleanup
-deterministic.
+Workers run in isolated worktrees with predictable paths and branches.
+This prevents worker collisions and makes review/cleanup deterministic.
 
 ## What Exists Right Now
 
@@ -78,33 +125,36 @@ deterministic.
 - `openclaw code` command family exists
 - worker runtime exists
 - gateway methods exist
-- workspace summary RPC exists for the native shell
+- workspace summary RPC exists
+- self-drive loop exists on the VPS
 
-### Native shell
+### Product surfaces
 
-- menu entry opens the cockpit window
-- a native cockpit store exists
-- the window can render current summary data
+- a native Arc window exists
+- a VPS TUI exists
+- the app can render current summary data and worker state
+- the TUI can operate the live VPS queue
 
 ## What Is Missing
 
 ### Immediate
 
-- worker action buttons in the native cockpit
-- live log streaming or polling in the native cockpit
-- run detail surface
+- blocked / needs-input queue in the app
+- review queue in the app
+- run summary surface in the app
+- diff/test/log review lane
 
 ### Next
 
-- review-ready artifacts in the native cockpit
-- diff/test panel
-- project workspace save/restore
+- project/workspace persistence
+- stronger global project home
+- better visual polish for the TUI
 
 ### Later
 
 - PTY-backed embedded terminal lanes
 - per-lane backend/model picker
-- local interactive session model beside worker sessions
+- local interactive sessions beside background workers
 
 ## Build Constraint To Remember
 
