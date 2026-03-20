@@ -10,7 +10,7 @@ mkdir -p "${LOCAL_BIN_DIR}"
 
 cat > "${LOCAL_BIN_DIR}/openclaw" <<EOF
 #!/usr/bin/env bash
-exec node "${ROOT_DIR}/openclaw.mjs" "\$@"
+exec node --import tsx "${ROOT_DIR}/src/index.ts" "\$@"
 EOF
 
 cat > "${LOCAL_BIN_DIR}/arc" <<EOF
