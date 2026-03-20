@@ -11,4 +11,4 @@ load_arc_self_drive_env
 export PATH="${HOME}/.npm-global/bin:${HOME}/.local/bin:${PATH}"
 
 cd "$ROOT_DIR"
-exec node "$ROOT_DIR/openclaw.mjs" gateway --port "$PORT"
+exec node --import tsx "$ROOT_DIR/src/index.ts" gateway --port "$PORT"
