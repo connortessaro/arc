@@ -56,25 +56,46 @@ resolve_upstream() {
   printf 'origin/%s\n' "$branch"
 }
 
+resolve_root_package_dir() {
+  local package_name="$1"
+  pnpm --dir "$ROOT_DIR" ls "$package_name" --depth -1 --json 2>/dev/null | \
+    python3 - "$package_name" <<'PY'
+import json
+import sys
+
+package_name = sys.argv[1]
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+if not isinstance(payload, list) or not payload:
+    print("")
+    raise SystemExit(0)
+
+dependencies = payload[0].get("dependencies") or {}
+entry = dependencies.get(package_name) or {}
+path = entry.get("path")
+print(path or "")
+PY
+}
+
 repair_registry_package() {
   local package_name="$1"
   local encoded_name="${package_name//\//+}"
-  local top_level_target top_level_target_resolved preferred_package_dir=""
+  local preferred_package_dir="" preferred_package_path=""
   local package_matches
   package_matches="$(find "$ROOT_DIR/node_modules/.pnpm" -maxdepth 1 -type d -name "${encoded_name}@*" | sort || true)"
 
   [[ -n "$package_matches" ]] || return 0
 
-  top_level_target="$ROOT_DIR/node_modules/$package_name"
-  if [[ -L "$top_level_target" ]]; then
-    top_level_target_resolved="$(readlink -f "$top_level_target" 2>/dev/null || true)"
-  else
-    top_level_target_resolved=""
-  fi
+  preferred_package_path="$(resolve_root_package_dir "$package_name")"
 
   while IFS= read -r package_dir; do
     [[ -n "$package_dir" ]] || continue
-    if [[ -n "$top_level_target_resolved" && "$top_level_target_resolved" == "$package_dir/node_modules/$package_name" ]]; then
+    if [[ -n "$preferred_package_path" && "$preferred_package_path" == "$package_dir/node_modules/$package_name" ]]; then
       preferred_package_dir="$package_dir"
     fi
 
