@@ -30,6 +30,8 @@ type CodeCockpitTuiOptions = {
   repoRoot?: string;
 };
 
+const DASHBOARD_HEALTHCHECK_INTERVAL_MS = 30_000;
+
 type TaskListPayload = {
   storePath: string;
   tasks: CodeTask[];
@@ -475,12 +477,14 @@ async function readHealthcheck(repoRoot: string): Promise<HealthcheckPayload | n
   }
 }
 
-async function loadDashboardSnapshot(repoRoot: string): Promise<DashboardSnapshot> {
-  const [summary, taskPayload, reviewPayload, health] = await Promise.all([
+async function loadDashboardSnapshot(
+  repoRoot: string,
+  health: HealthcheckPayload | null,
+): Promise<DashboardSnapshot> {
+  const [summary, taskPayload, reviewPayload] = await Promise.all([
     callDashboardGateway<CodeCockpitWorkspaceSummary>("code.cockpit.summary"),
     callDashboardGateway<TaskListPayload>("code.task.list", { repoRoot }),
     callDashboardGateway<ReviewListPayload>("code.review.list", {}),
-    readHealthcheck(repoRoot),
   ]);
   const tasks = taskPayload.tasks.filter((task) => task.repoRoot === repoRoot);
   const reviews = reviewPayload.reviews.filter((review) =>
@@ -541,6 +545,8 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
   let promptVisible = false;
   let refreshTimer: NodeJS.Timeout | null = null;
   let inFlightRefresh: Promise<void> | null = null;
+  let cachedHealth: HealthcheckPayload | null = null;
+  let lastHealthcheckAt = 0;
   let exiting = false;
   let resolveExit: (() => void) | null = null;
 
@@ -602,7 +608,14 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     setFooter("Arc stays live on the VPS after you quit this dashboard.");
     inFlightRefresh = (async () => {
       try {
-        const snapshot = await loadDashboardSnapshot(repoRoot);
+        const nowMs = Date.now();
+        const shouldRefreshHealth =
+          cachedHealth === null || nowMs - lastHealthcheckAt >= DASHBOARD_HEALTHCHECK_INTERVAL_MS;
+        if (shouldRefreshHealth) {
+          cachedHealth = await readHealthcheck(repoRoot);
+          lastHealthcheckAt = nowMs;
+        }
+        const snapshot = await loadDashboardSnapshot(repoRoot, cachedHealth);
         header.setText(theme.header(`Arc · ${shortenHomePath(repoRoot)}`));
         dashboard.setSnapshot(snapshot);
         dashboard.setStatusMessage(
