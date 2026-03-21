@@ -37,24 +37,24 @@ function runCodeCommand(action: () => Promise<void>) {
 export function registerCodeCli(program: Command) {
   const code = program
     .command("code")
-    .description("Run the coding cockpit for orchestrated local agent work")
+    .description("Manage tasks and workers for your software projects")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw code", "Show the current coding cockpit summary."],
+          ["openclaw code", "Show the current project summary."],
           [
             'openclaw code task add "Build coding cockpit" --repo ~/openclaw',
-            "Create a task in the local orchestration queue.",
+            "Create a task in the project queue.",
           ],
           [
             "openclaw code worker add --task task_1234 --name planner --worktree ~/openclaw/.worktrees/planner",
-            "Attach a worker lane to a task.",
+            "Attach a worker to a task.",
           ],
           ["openclaw code worker start worker_5678", "Start a gateway-owned Codex worker run."],
           [
             'openclaw code review add "Ready for diff review" --task task_1234 --worker worker_5678',
-            "Create a review request for the review lane.",
+            "Create a review request for a completed task.",
           ],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/code", "docs.openclaw.ai/cli/code")}\n`,
     )
@@ -82,7 +82,7 @@ export function registerCodeCli(program: Command) {
 
   code
     .command("summary")
-    .description("Show the coding cockpit summary")
+    .description("Show the project summary")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCodeCommand(async () => {
@@ -90,10 +90,10 @@ export function registerCodeCli(program: Command) {
       });
     });
 
-  const task = code.command("task").description("Manage coding cockpit tasks");
+  const task = code.command("task").description("Manage project tasks");
   task
     .command("add")
-    .description("Create a task in the coding cockpit queue")
+    .description("Create a task in the project queue")
     .argument("<title>", "Task title")
     .option("--repo <path>", "Repository root for the task")
     .option("--goal <text>", "Goal or acceptance target")
@@ -109,7 +109,7 @@ export function registerCodeCli(program: Command) {
 
   task
     .command("list")
-    .description("List tasks in the coding cockpit")
+    .description("List project tasks")
     .option("--status <status>", "Filter by task status")
     .option("--repo <path>", "Filter by repository root")
     .option("--json", "Output JSON", false)
@@ -246,7 +246,7 @@ export function registerCodeCli(program: Command) {
 
   worker
     .command("show")
-    .description("Show a worker with gateway-owned runtime details")
+    .description("Show worker details and runtime state")
     .argument("<workerId>", "Worker identifier")
     .option("--json", "Output JSON", false)
     .action(async (workerId, opts) => {
@@ -278,7 +278,7 @@ export function registerCodeCli(program: Command) {
       });
     });
 
-  const review = code.command("review").description("Manage review-lane requests");
+  const review = code.command("review").description("Manage review requests");
   review
     .command("add")
     .description("Create a review request")
@@ -320,7 +320,7 @@ export function registerCodeCli(program: Command) {
       });
     });
 
-  const memory = code.command("memory").description("Capture and list operational memory");
+  const memory = code.command("memory").description("Capture and list context snapshots");
   memory
     .command("add")
     .description("Capture a context snapshot for a task or worker")
@@ -349,7 +349,7 @@ export function registerCodeCli(program: Command) {
       });
     });
 
-  const decision = code.command("decision").description("Track operator and system decisions");
+  const decision = code.command("decision").description("Track project decisions");
   decision
     .command("add")
     .description("Append a decision log entry")

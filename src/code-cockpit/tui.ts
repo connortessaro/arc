@@ -280,7 +280,7 @@ class ArcDashboardView implements Component {
       `ARC OPERATOR CONSOLE · ${shortenHomePath(repoRoot)}`,
     );
     const stats = [
-      renderStatusChip("gw", gatewayStatus, pickHealthTone(gatewayStatus)),
+      renderStatusChip("gateway", gatewayStatus, pickHealthTone(gatewayStatus)),
       renderStatusChip("claude", claudeHealth, pickHealthTone(claudeHealth)),
       renderStatusChip("codex", codexHealth, pickHealthTone(codexHealth)),
       renderStatusChip(
@@ -666,8 +666,8 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
   root.addChild(footer);
   tui.addChild(root);
   tui.setFocus(dashboard);
-  header.setText(theme.dim("Local dashboard · remote Arc runtime"));
-  footer.setText(theme.dim("Arc stays live on the VPS after you quit this dashboard."));
+  header.setText(theme.dim("Arc dashboard · reviewing remote runtime"));
+  footer.setText(theme.dim("Workers keep running after you quit this dashboard."));
 
   const setFooter = (message: string) => {
     footer.setText(theme.dim(message));
@@ -718,7 +718,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
       return await inFlightRefresh;
     }
     dashboard.setStatusMessage(message);
-    setFooter("Arc stays live on the VPS after you quit this dashboard.");
+    setFooter("Workers keep running after you quit this dashboard.");
     inFlightRefresh = (async () => {
       try {
         const nowMs = Date.now();
@@ -729,7 +729,7 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
           lastHealthcheckAt = nowMs;
         }
         const snapshot = await loadDashboardSnapshot(repoRoot, cachedHealth);
-        header.setText(theme.dim("Local dashboard · remote Arc runtime"));
+        header.setText(theme.dim("Arc dashboard · reviewing remote runtime"));
         dashboard.setSnapshot(snapshot);
         dashboard.setStatusMessage(
           `Ready. ${snapshot.activeTasks.length} active tasks · ${snapshot.attentionItems.length} items need attention.`,
