@@ -1,3 +1,4 @@
+import * as channelReplyRuntimeSdk from "openclaw/plugin-sdk/channel-reply-runtime";
 import * as compatSdk from "openclaw/plugin-sdk/compat";
 import * as coreSdk from "openclaw/plugin-sdk/core";
 import type {
@@ -110,6 +111,11 @@ describe("plugin-sdk subpath exports", () => {
 
   it("exports runtime helpers from the dedicated subpath", () => {
     expect(typeof runtimeSdk.createLoggerBackedRuntime).toBe("function");
+  });
+
+  it("exports narrow channel reply helpers from the dedicated subpath", () => {
+    expect(typeof channelReplyRuntimeSdk.dispatchReplyWithBufferedBlockDispatcher).toBe("function");
+    expect(typeof channelReplyRuntimeSdk.listSkillCommandsForAgents).toBe("function");
   });
 
   it("exports provider setup helpers from the dedicated subpath", () => {

@@ -22,7 +22,10 @@ describe("defaultTelegramBotDeps", () => {
     vi.doMock("openclaw/plugin-sdk/infra-runtime", () => ({
       enqueueSystemEvent: vi.fn(),
     }));
-    vi.doMock("openclaw/plugin-sdk/reply-runtime", () => ({
+    vi.doMock("openclaw/plugin-sdk/reply-runtime", () => {
+      throw new Error("reply-runtime barrel should not load while building bot deps");
+    });
+    vi.doMock("openclaw/plugin-sdk/channel-reply-runtime", () => ({
       dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
       listSkillCommandsForAgents: vi.fn(),
     }));
