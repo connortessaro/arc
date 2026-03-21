@@ -253,4 +253,60 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
         }),
     );
   },
+  "code.terminal-lane.add": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().addTerminalLane({
+          repoRoot: requireTitle(params.repoRoot, "repoRoot"),
+          worktreePath: optionalString(params.worktreePath),
+          backendProfile: optionalString(params.backendProfile),
+          workerId: optionalString(params.workerId),
+          title: optionalString(params.title),
+        }),
+    );
+  },
+  "code.terminal-lane.list": async ({ respond }) => {
+    await withRuntimeResult(respond, async () => await getCodeCockpitRuntime().listTerminalLanes());
+  },
+  "code.terminal-lane.show": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().showTerminalLane({
+          laneId: requireTitle(params.laneId, "laneId"),
+        }),
+    );
+  },
+  "code.terminal-lane.update": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () => {
+      const laneId = requireTitle(params.laneId, "laneId");
+      const patch: Record<string, unknown> = {};
+      if (params.worktreePath !== undefined) {
+        patch.worktreePath = params.worktreePath;
+      }
+      if (params.backendProfile !== undefined) {
+        patch.backendProfile = params.backendProfile;
+      }
+      if (params.workerId !== undefined) {
+        patch.workerId = params.workerId;
+      }
+      if (params.title !== undefined) {
+        patch.title = params.title;
+      }
+      if (params.status !== undefined) {
+        patch.status = params.status;
+      }
+      return await getCodeCockpitRuntime().updateTerminalLane({ laneId, patch });
+    });
+  },
+  "code.terminal-lane.remove": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().removeTerminalLane({
+          laneId: requireTitle(params.laneId, "laneId"),
+        }),
+    );
+  },
 };
