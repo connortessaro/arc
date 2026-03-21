@@ -212,6 +212,7 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   generatedAt: string;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  finishedLanes: CodeCockpitLaneSummary[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -1212,33 +1213,47 @@ export async function getCodeCockpitWorkspaceSummary(
     }
   }
 
-  const activeLanes = sortByUpdatedAt(store.workers)
+  function toLaneSummary(worker: CodeWorkerSession): CodeCockpitLaneSummary | undefined {
+    const task = taskById.get(worker.taskId);
+    if (!task) {
+      return undefined;
+    }
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      workerId: worker.id,
+      workerName: worker.name,
+      lane: worker.lane,
+      status: worker.status,
+      repoRoot: worker.repoRoot ?? task.repoRoot,
+      worktreePath: worker.worktreePath,
+      branch: worker.branch,
+      objective: worker.objective,
+      backendId: worker.backendId,
+      activeRunId: worker.activeRunId,
+      updatedAt: worker.updatedAt,
+      latestRun: latestRunByWorker.get(worker.id) ?? null,
+      pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
+    };
+  }
+
+  const sorted = sortByUpdatedAt(store.workers);
+
+  const activeLanes = sorted
     .filter((worker) => worker.status !== "completed")
     .slice(0, 6)
     .flatMap((worker): CodeCockpitLaneSummary[] => {
-      const task = taskById.get(worker.taskId);
-      if (!task) {
-        return [];
-      }
-      return [
-        {
-          taskId: task.id,
-          taskTitle: task.title,
-          workerId: worker.id,
-          workerName: worker.name,
-          lane: worker.lane,
-          status: worker.status,
-          repoRoot: worker.repoRoot ?? task.repoRoot,
-          worktreePath: worker.worktreePath,
-          branch: worker.branch,
-          objective: worker.objective,
-          backendId: worker.backendId,
-          activeRunId: worker.activeRunId,
-          updatedAt: worker.updatedAt,
-          latestRun: latestRunByWorker.get(worker.id) ?? null,
-          pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
-        },
-      ];
+      const lane = toLaneSummary(worker);
+      return lane ? [lane] : [];
+    });
+
+  const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+  const finishedLanes = sorted
+    .filter((worker) => terminalStatuses.has(worker.status))
+    .slice(0, 12)
+    .flatMap((worker): CodeCockpitLaneSummary[] => {
+      const lane = toLaneSummary(worker);
+      return lane ? [lane] : [];
     });
 
   return {
@@ -1246,5 +1261,6 @@ export async function getCodeCockpitWorkspaceSummary(
     generatedAt: nowIso(options),
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    finishedLanes,
   };
 }

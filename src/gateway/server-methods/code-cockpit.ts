@@ -244,6 +244,15 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
         }),
     );
   },
+  "code.worker.diff": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().readWorkerDiff({
+          workerId: requireWorkerId(params.workerId),
+        }),
+    );
+  },
   "code.supervisor.tick": async ({ params, respond }) => {
     await withRuntimeResult(
       respond,
