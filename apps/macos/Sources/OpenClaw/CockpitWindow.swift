@@ -73,6 +73,16 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        if let reviewReadyLanes = snapshot.reviewReadyLanes,
+                           !reviewReadyLanes.isEmpty
+                        {
+                            CockpitReviewReadySection(
+                                lanes: reviewReadyLanes,
+                                selectedWorkerId: self.store.selectedWorkerId,
+                                onSelect: { workerId in
+                                    Task { await self.store.selectWorker(workerId) }
+                                })
+                        }
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
@@ -451,6 +461,65 @@ private struct CockpitSelectedWorkerSection: View {
         if stderr.isEmpty { return stdout }
         if stdout.isEmpty { return stderr }
         return "\(stdout)\n\nstderr:\n\(stderr)"
+    }
+}
+
+private struct CockpitReviewReadySection: View {
+    let lanes: [CockpitLaneSummary]
+    let selectedWorkerId: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle")
+                    .foregroundStyle(.green)
+                Text("Review Ready")
+                    .font(.title3.weight(.semibold))
+                Text("\(self.lanes.count)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(self.lanes) { lane in
+                    Button {
+                        self.onSelect(lane.workerId)
+                    } label: {
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(lane.taskTitle)
+                                    .font(.headline)
+                                Text(lane.workerName)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                if let branch = lane.branch {
+                                    Text(branch)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let summary = lane.latestRun?.summary, !summary.isEmpty {
+                                    Text(summary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            Spacer()
+                            Text("awaiting review")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.green)
+                        }
+                        .padding(14)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(self.selectedWorkerId == lane.workerId ? Color.accentColor.opacity(0.14) : Color.green.opacity(0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

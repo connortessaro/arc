@@ -21,6 +21,7 @@ import { stopTuiSafely } from "../tui/tui.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type {
+  CodeCockpitLaneSummary,
   CodeCockpitWorkspaceSummary,
   CodeReviewRequest,
   CodeTask,
@@ -61,6 +62,7 @@ type HealthcheckPayload = {
 
 type AttentionItem =
   | { kind: "review"; id: string; review: CodeReviewRequest }
+  | { kind: "review_ready"; id: string; lane: CodeCockpitLaneSummary }
   | { kind: "blocked"; id: string; task: CodeTask };
 
 type DashboardSnapshot = {
@@ -363,6 +365,19 @@ class ArcDashboardView implements Component {
         );
         continue;
       }
+      if (item.kind === "review_ready") {
+        const label = `${prefix} [review ready] ${item.lane.taskTitle}`;
+        lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
+        lines.push(
+          ...renderWrappedBullet(
+            theme.dim(
+              `worker ${item.lane.workerName} · ${item.lane.branch ?? "no branch"} · awaiting review`,
+            ),
+            width,
+          ),
+        );
+        continue;
+      }
       const label = `${prefix} [blocked] ${item.task.title}`;
       lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
       lines.push(
@@ -450,6 +465,21 @@ class ArcDashboardView implements Component {
           selectedAttention.review.summary ??
             selectedAttention.review.notes ??
             "Resolve this review to unblock follow-up work.",
+          width,
+        ),
+      );
+    } else if (selectedAttention?.kind === "review_ready") {
+      lines.push(
+        truncateToWidth(
+          `${selectedAttention.lane.taskTitle} · awaiting review · worker ${selectedAttention.lane.workerName}`,
+          width,
+        ),
+      );
+      lines.push(
+        ...renderWrappedBullet(
+          selectedAttention.lane.objective ??
+            selectedAttention.lane.latestRun?.summary ??
+            "Worker finished and is ready for review.",
           width,
         ),
       );
@@ -549,6 +579,11 @@ function buildDashboardSnapshot(
     ...scopedReviews
       .filter((review) => review.status === "pending")
       .map((review) => ({ kind: "review" as const, id: review.id, review })),
+    ...(summary.reviewReadyLanes ?? []).map((lane) => ({
+      kind: "review_ready" as const,
+      id: lane.workerId,
+      lane,
+    })),
     ...blockedTasks.map((task) => ({ kind: "blocked" as const, id: task.id, task })),
   ];
   return {

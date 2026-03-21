@@ -214,6 +214,7 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let reviewReadyLanes: [CockpitLaneSummary]?
 }
 
 extension CockpitGatewayStatus {
@@ -417,6 +418,35 @@ extension CockpitWorkspaceSummary {
                     finishedAt: "2026-03-19T12:50:00.000Z",
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
+                pendingReview: nil),
+        ],
+        reviewReadyLanes: [
+            CockpitLaneSummary(
+                taskId: "task_shell",
+                taskTitle: "Ship the cockpit shell",
+                workerId: "worker_awaiting",
+                workerName: "awaiting-lane",
+                lane: "worker",
+                status: "awaiting_review",
+                repoRoot: "/Users/tessaro/openclaw",
+                worktreePath: "/Users/tessaro/openclaw/.worktrees/code/awaiting-lane",
+                branch: "code/task_shell/awaiting-lane",
+                objective: "Render native cockpit panels and menu entry.",
+                backendId: "codex-cli",
+                activeRunId: nil,
+                updatedAt: "2026-03-19T12:55:00.000Z",
+                latestRun: CockpitRunSummary(
+                    id: "run_awaiting",
+                    taskId: "task_shell",
+                    workerId: "worker_awaiting",
+                    status: "succeeded",
+                    summary: "All checks passed, PR ready.",
+                    backendId: "codex-cli",
+                    threadId: "thread_awaiting",
+                    startedAt: "2026-03-19T12:50:00.000Z",
+                    finishedAt: "2026-03-19T12:54:00.000Z",
+                    terminationReason: nil,
+                    updatedAt: "2026-03-19T12:54:00.000Z"),
                 pendingReview: nil),
         ])
 }
