@@ -11,6 +11,9 @@ mkdir -p "${LOCAL_BIN_DIR}"
 cat > "${LOCAL_BIN_DIR}/openclaw" <<EOF
 #!/usr/bin/env bash
 cd -- "${ROOT_DIR}"
+if [[ -f "${ROOT_DIR}/dist/entry.js" || -f "${ROOT_DIR}/dist/entry.mjs" ]]; then
+  exec node "${ROOT_DIR}/openclaw.mjs" "\$@"
+fi
 exec node --import tsx "${ROOT_DIR}/src/index.ts" "\$@"
 EOF
 
