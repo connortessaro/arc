@@ -235,6 +235,16 @@ export type CodeResolvedReviewResult = {
   worker: CodeWorkerSession | null;
 };
 
+export type CodeWorkerReviewArtifacts = {
+  workerId: string;
+  worktreePath: string;
+  baseBranch: string;
+  diff: string;
+  commitLog: string;
+  testOutput: string;
+  generatedAt: string;
+};
+
 export type CodeCockpitStoreOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
