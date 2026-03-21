@@ -216,6 +216,40 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let activeLanes: [CockpitLaneSummary]
 }
 
+// MARK: - Layout
+
+enum CockpitLayoutPreset: String, CaseIterable, Codable, Sendable, Equatable, Identifiable {
+    /// 3 worker slots across the top, 1 review slot spanning the bottom-right.
+    case threeWorkerOneReview = "3w1r"
+
+    var id: String { self.rawValue }
+
+    var label: String {
+        switch self {
+        case .threeWorkerOneReview:
+            "3 Workers + 1 Review"
+        }
+    }
+
+    var workerSlotCount: Int {
+        switch self {
+        case .threeWorkerOneReview:
+            3
+        }
+    }
+
+    var hasReviewSlot: Bool {
+        switch self {
+        case .threeWorkerOneReview:
+            true
+        }
+    }
+}
+
+extension CockpitLayoutPreset {
+    static let `default`: CockpitLayoutPreset = .threeWorkerOneReview
+}
+
 extension CockpitGatewayStatus {
     static let previewLocal = CockpitGatewayStatus(
         mode: .local,

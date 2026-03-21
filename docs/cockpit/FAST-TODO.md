@@ -30,7 +30,7 @@ Arc becomes the default daily surface when these are all done:
 
 - [ ] Add embedded PTY terminal lanes
 - [ ] Bind terminal lanes to worktrees
-- [ ] Add default 3-worker + 1-review layout
+- [x] Add default 3-worker + 1-review layout
 - [ ] Save and restore project layouts
 
 ## Phase C: Always-On Arc
