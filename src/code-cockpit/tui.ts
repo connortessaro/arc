@@ -69,6 +69,7 @@ type DashboardSnapshot = {
   tasks: CodeTask[];
   reviews: CodeReviewRequest[];
   activeTasks: CodeTask[];
+  recentlyDoneTasks: CodeTask[];
   attentionItems: AttentionItem[];
   health: HealthcheckPayload | null;
 };
@@ -97,6 +98,8 @@ type DashboardActions = {
   onRefresh: () => void;
   onNewTask: () => void;
   onResolveReview: (status: "approved" | "changes_requested" | "dismissed") => void;
+  onUnblockTask: () => void;
+  onCancelTask: () => void;
   onQuit: () => void;
 };
 
@@ -160,6 +163,57 @@ function pickHealthTone(value: string | undefined): "pulse" | "data" | "alert" |
     return "data";
   }
   return "alert";
+}
+
+const HEALTH_THRESHOLDS = {
+  memoryLowMiB: 512,
+  swapHighMiB: 1024,
+  diskLowGiB: 5,
+  rssHighMiB: 2048,
+};
+
+function renderQueuePipeline(counts: Record<CodeTaskStatus, number>): string {
+  const stages: Array<{
+    label: string;
+    key: CodeTaskStatus;
+    tone: "pulse" | "data" | "alert" | "muted";
+  }> = [
+    { label: "Q", key: "queued", tone: "data" },
+    { label: "P", key: "planning", tone: "data" },
+    { label: "A", key: "in_progress", tone: "pulse" },
+    { label: "R", key: "review", tone: "alert" },
+    { label: "B", key: "blocked", tone: "alert" },
+    { label: "D", key: "done", tone: "muted" },
+  ];
+  const arrow = operatorColors.muted(" → ");
+  return stages
+    .map(({ label, key, tone }) => {
+      const count = counts[key] ?? 0;
+      const color = count > 0 ? operatorColors[tone] : operatorColors.muted;
+      return color(`${label}:${count}`);
+    })
+    .join(arrow);
+}
+
+function renderHealthWarnings(health: HealthcheckPayload | null): string[] {
+  if (!health?.system) {
+    return [];
+  }
+  const warnings: string[] = [];
+  const { memoryAvailableMiB, swapUsedMiB, diskFreeGiB, gatewayRssMiB } = health.system;
+  if (memoryAvailableMiB != null && memoryAvailableMiB < HEALTH_THRESHOLDS.memoryLowMiB) {
+    warnings.push(operatorColors.alert(`⚠ LOW MEM ${memoryAvailableMiB}MiB`));
+  }
+  if (swapUsedMiB != null && swapUsedMiB > HEALTH_THRESHOLDS.swapHighMiB) {
+    warnings.push(operatorColors.alert(`⚠ HIGH SWAP ${swapUsedMiB}MiB`));
+  }
+  if (diskFreeGiB != null && diskFreeGiB < HEALTH_THRESHOLDS.diskLowGiB) {
+    warnings.push(operatorColors.alert(`⚠ LOW DISK ${diskFreeGiB}GiB`));
+  }
+  if (gatewayRssMiB != null && gatewayRssMiB > HEALTH_THRESHOLDS.rssHighMiB) {
+    warnings.push(operatorColors.alert(`⚠ HIGH RSS ${gatewayRssMiB}MiB`));
+  }
+  return warnings;
 }
 
 class ArcDashboardView implements Component {
@@ -229,6 +283,14 @@ class ArcDashboardView implements Component {
       this.actions.onResolveReview("dismissed");
       return;
     }
+    if (lowered === "u") {
+      this.actions.onUnblockTask();
+      return;
+    }
+    if (lowered === "d") {
+      this.actions.onCancelTask();
+      return;
+    }
     if (lowered === "q" || matchesKey(data, Key.ctrl("c"))) {
       this.actions.onQuit();
     }
@@ -269,6 +331,32 @@ class ArcDashboardView implements Component {
     return item.review.id;
   }
 
+  getSelectedTaskId(): string | null {
+    if (this.selectedPane === "tasks") {
+      return this.selectedTaskId;
+    }
+    const item = this.snapshot?.attentionItems.find(
+      (entry) => entry.id === this.selectedAttentionId,
+    );
+    if (item?.kind === "blocked") {
+      return item.task.id;
+    }
+    return null;
+  }
+
+  getSelectedBlockedTaskId(): string | null {
+    if (this.selectedPane !== "attention") {
+      return null;
+    }
+    const item = this.snapshot?.attentionItems.find(
+      (entry) => entry.id === this.selectedAttentionId,
+    );
+    if (item?.kind === "blocked") {
+      return item.task.id;
+    }
+    return null;
+  }
+
   private renderHeader(width: number): string[] {
     const { summary, health, repoRoot, activeTasks, attentionItems } = this.snapshot!;
     const gatewayStatus = health?.gateway?.status ?? "unknown";
@@ -303,11 +391,20 @@ class ArcDashboardView implements Component {
         ? renderStatusChip("worker", activeWorker.workerName, "pulse")
         : renderStatusChip("worker", "idle", "muted"),
     ].join("  ");
-    return [
+
+    const pipeline = renderQueuePipeline(summary.taskStatusCounts);
+    const warnings = renderHealthWarnings(health);
+
+    const lines = [
       truncateToWidth(topLine, width),
       truncateToWidth(operatorColors.border("-".repeat(Math.max(0, width))), width),
       truncateToWidth(stats, width),
+      truncateToWidth(pipeline, width),
     ];
+    if (warnings.length > 0) {
+      lines.push(truncateToWidth(warnings.join("  "), width));
+    }
+    return lines;
   }
 
   private renderTasksPane(width: number): string[] {
@@ -465,6 +562,16 @@ class ArcDashboardView implements Component {
       lines.push(theme.dim("Select a task or attention item."));
     }
 
+    lines.push("", renderPanelTitle("RECENTLY COMPLETED", width, "pulse"));
+    const { recentlyDoneTasks } = this.snapshot!;
+    if (recentlyDoneTasks.length === 0) {
+      lines.push(theme.dim("  No completed tasks yet."));
+    } else {
+      for (const task of recentlyDoneTasks) {
+        lines.push(...renderWrappedBullet(operatorColors.pulse(`✓ ${task.title}`), width));
+      }
+    }
+
     lines.push("", renderPanelTitle("RECENT RUNS", width, "data"));
     const recentRuns = this.snapshot!.summary.recentRuns.slice(0, 3);
     if (recentRuns.length === 0) {
@@ -483,7 +590,7 @@ class ArcDashboardView implements Component {
     lines.push(
       "",
       theme.dim(
-        "n new task | Tab switch pane | ↑↓ move | a approve | c changes | x dismiss | r refresh | q quit",
+        "n new | u unblock | d cancel | a approve | c changes | x dismiss | Tab pane | ↑↓ move | r refresh | q quit",
       ),
     );
     return lines;
@@ -545,6 +652,10 @@ function buildDashboardSnapshot(
       ["queued", "planning", "in_progress"].includes(task.status) && !isTaskInRetryBackoff(task),
   );
   const blockedTasks = tasks.filter((task) => task.status === "blocked");
+  const recentlyDoneTasks = tasks
+    .filter((task) => task.status === "done")
+    .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 3);
   const attentionItems: AttentionItem[] = [
     ...scopedReviews
       .filter((review) => review.status === "pending")
@@ -557,6 +668,7 @@ function buildDashboardSnapshot(
     tasks,
     reviews: scopedReviews,
     activeTasks,
+    recentlyDoneTasks,
     attentionItems,
     health,
   };
@@ -567,6 +679,8 @@ export function renderArcDashboardForTest(input: ArcDashboardRenderInput): strin
     onRefresh: () => undefined,
     onNewTask: () => undefined,
     onResolveReview: () => undefined,
+    onUnblockTask: () => undefined,
+    onCancelTask: () => undefined,
     onQuit: () => undefined,
   });
   view.setSnapshot(
@@ -644,6 +758,12 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     },
     onResolveReview: (status) => {
       void resolveSelectedReview(status);
+    },
+    onUnblockTask: () => {
+      void unblockSelectedTask();
+    },
+    onCancelTask: () => {
+      void cancelSelectedTask();
     },
     onQuit: () => {
       requestExit();
@@ -762,6 +882,47 @@ export async function runCodeCockpitTui(opts: CodeCockpitTuiOptions = {}) {
     } catch (error) {
       dashboard.setStatusMessage(
         `Failed to update review ${reviewId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      tui.requestRender();
+    }
+  };
+
+  const unblockSelectedTask = async () => {
+    const taskId = dashboard.getSelectedBlockedTaskId();
+    if (!taskId) {
+      dashboard.setStatusMessage("Select a blocked task in the attention pane to unblock.");
+      tui.requestRender();
+      return;
+    }
+    dashboard.setStatusMessage(`Requeuing blocked task ${taskId}…`);
+    tui.requestRender();
+    try {
+      await callDashboardGateway("code.task.status", { taskId, status: "queued" });
+      await nudgeSupervisor(repoRoot);
+      await refresh(`Unblocked task ${taskId}. It will be retried.`);
+    } catch (error) {
+      dashboard.setStatusMessage(
+        `Failed to unblock task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      tui.requestRender();
+    }
+  };
+
+  const cancelSelectedTask = async () => {
+    const taskId = dashboard.getSelectedTaskId();
+    if (!taskId) {
+      dashboard.setStatusMessage("Select a task to cancel.");
+      tui.requestRender();
+      return;
+    }
+    dashboard.setStatusMessage(`Cancelling task ${taskId}…`);
+    tui.requestRender();
+    try {
+      await callDashboardGateway("code.task.status", { taskId, status: "cancelled" });
+      await refresh(`Cancelled task ${taskId}.`);
+    } catch (error) {
+      dashboard.setStatusMessage(
+        `Failed to cancel task ${taskId}: ${error instanceof Error ? error.message : String(error)}`,
       );
       tui.requestRender();
     }
