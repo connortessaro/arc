@@ -347,6 +347,39 @@ describe("code cockpit store", () => {
     });
   });
 
+  it("tracks blocked failure classes and retry backoff counts in the workspace summary", async () => {
+    const storeModule = await importStoreModule();
+    const blockedTask = await storeModule.createCodeTask({
+      title: "Repair Claude auth",
+      repoRoot: "/tmp/openclaw",
+      status: "blocked",
+    });
+    await storeModule.updateCodeTask(blockedTask.id, {
+      lastFailureClass: "engine-auth",
+      lastOperatorHint: "Claude auth is missing on the VPS.",
+    });
+
+    const retryingTask = await storeModule.createCodeTask({
+      title: "Retry the transient worker failure",
+      repoRoot: "/tmp/openclaw",
+      status: "queued",
+    });
+    await storeModule.updateCodeTask(retryingTask.id, {
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      retryAfter: "2026-03-20T00:15:00.000Z",
+      lastOperatorHint: "Auto-retry scheduled after a transient runtime failure.",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary({
+      now: () => new Date("2026-03-20T00:05:00.000Z"),
+    });
+
+    expect(summary.blockedTaskFailureCounts["engine-auth"]).toBe(1);
+    expect(summary.blockedTaskFailureCounts["transient-runtime"]).toBe(0);
+    expect(summary.retryBackoffCount).toBe(1);
+  });
+
   it("keeps failed workers in the lane summary so they stay manageable", async () => {
     const storeModule = await importStoreModule();
     const task = await storeModule.createCodeTask({

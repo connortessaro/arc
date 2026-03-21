@@ -25,6 +25,7 @@ arc self-drive
 arc drive status
 arc dashboard
 arc status
+arc cleanup
 arc do "Build the next Arc feature"
 arc tasks --json
 arc reviews --json
@@ -131,6 +132,20 @@ cd /srv/arc/repo
 bash scripts/arc-self-drive/status.sh
 ```
 
+Preview or apply conservative housekeeping on the VPS:
+
+```bash
+cd /srv/arc/repo
+bash scripts/arc-self-drive/cleanup.sh
+bash scripts/arc-self-drive/cleanup.sh --apply
+```
+
+Read the operator runbook when you need to interpret failure classes, retry backoff, or cleanup behavior:
+
+```text
+docs/cockpit/OPS-RUNBOOK.md
+```
+
 Install notes:
 
 - the installer also rewrites `~/.openclaw/openclaw.json` so:
@@ -144,6 +159,7 @@ Install notes:
 - set `ARC_SELF_DRIVE_STRICT_ENGINE=claude` in `~/.config/arc-self-drive/engine.env` when the queue must never fall back to Codex
 - if Claude hits a usage-limit or rate-limit style failure, self-drive cools it down for six hours and lets Codex carry the queue
 - the Telegram watchdog sends transition-based alerts directly through the Bot API, so primary runtime alerts still fire even if the OpenClaw gateway scheduler is down
+- `arc status` now reports retry-backoff counts, blocked failure classes, cleanup candidates, and system headroom so one command is enough for overnight triage
 
 ## Current Policy
 
@@ -158,6 +174,7 @@ Install notes:
 - `scripts/arc-self-drive/run-code-via-gateway.sh` forces `openclaw code` traffic through the live gateway on the VPS instead of mutating the cockpit store directly from a second process
 - `arc` and `openclaw code tui` open the same VPS dashboard; on the Mac this happens through SSH passthrough to the VPS dashboard, not through a local TypeScript runtime
 - successful unattended runs mark the worker `completed`, mark the task `done`, and let the queue continue
-- failed unattended runs mark the worker `failed` and move the task to `blocked`, so bad work becomes visible instead of silently retrying
+- transient unattended runtime failures back off once for 15 minutes and then re-enter the queue automatically
+- repeated transient failures and non-transient failures mark the worker `failed`, move the task to `blocked`, and attach an operator hint plus failure class
 - manual reviews still work when they exist: `approved` marks the task done, `changes_requested` reopens it for another worker pass, and `dismissed` cancels it
 - `deploy.sh` is the canonical VPS refresh path; it fast-forwards the current branch, refreshes dependencies, rewrites the systemd units, restarts the gateway, and leaves the timer enabled

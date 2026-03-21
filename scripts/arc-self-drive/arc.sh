@@ -98,6 +98,7 @@ Usage:
   arc dismiss <review-id>   Dismiss a review and resume the queue
   arc daemon <cmd>          status | start | stop | restart
   arc tick                  Run one supervisor tick immediately
+  arc cleanup [args...]     Dry-run cleanup by default; pass --apply to delete safe candidates
   arc doctor                Show health plus command paths
   arc help                  Show this help
 EOF
@@ -326,6 +327,13 @@ case "$command_name" in
       remote_arc_command tick "$@"
     else
       bash "${ROOT_DIR}/scripts/arc-self-drive/run-supervisor-tick.sh" --repo "${DEFAULT_REPO_ROOT}" "$@"
+    fi
+    ;;
+  cleanup)
+    if use_remote_arc; then
+      remote_arc_command cleanup "$@"
+    else
+      bash "${ROOT_DIR}/scripts/arc-self-drive/cleanup.sh" "$@"
     fi
     ;;
   doctor)

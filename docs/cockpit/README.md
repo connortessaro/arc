@@ -86,7 +86,8 @@ face of Arc, not the flagship product surface.
 4. `docs/plans/2026-03-20-arc-v1-product-spec.md`
 5. `docs/cockpit/FAST-TODO.md`
 6. `docs/cockpit/SELF-DRIVE.md`
-7. `docs/cockpit/TODO.md`
+7. `docs/cockpit/OPS-RUNBOOK.md`
+8. `docs/cockpit/TODO.md`
 
 ## Useful Commands
 
@@ -97,6 +98,7 @@ arc
 arc self-drive
 arc dashboard
 arc status
+arc cleanup
 arc do "Ship the next Arc feature"
 arc tasks --json
 arc reviews --json

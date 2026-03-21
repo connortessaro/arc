@@ -25,6 +25,8 @@ if [[ "$healthcheck_exit" -ne 0 ]]; then
   healthcheck_error="healthcheck exited with ${healthcheck_exit}"
 fi
 
+cleanup_json="$(bash "$ROOT_DIR/scripts/arc-self-drive/cleanup.sh" --json 2>/dev/null || printf '{}')"
+
 mkdir -p "$(dirname "$STATE_FILE")"
 chmod 700 "$(dirname "$STATE_FILE")"
 
@@ -36,11 +38,15 @@ decision_json="$(
   ARC_STORE_PATH="$STORE_PATH" \
   ARC_STATE_FILE="$STATE_FILE" \
   ARC_HOST_NAME="$host_name" \
+  ARC_CLEANUP_JSON="$cleanup_json" \
   ARC_NOTIFY_ON_HEALTHY="${ARC_TELEGRAM_NOTIFY_ON_HEALTHY:-true}" \
   ARC_STALL_THRESHOLD="${ARC_TELEGRAM_STALL_THRESHOLD:-3}" \
+  ARC_LOW_MEMORY_MIB="${ARC_TELEGRAM_LOW_MEMORY_MIB:-512}" \
+  ARC_HIGH_SWAP_MIB="${ARC_TELEGRAM_HIGH_SWAP_MIB:-1024}" \
   python3 <<'PY'
 import json
 import os
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,7 +57,10 @@ state_path = Path(os.environ["ARC_STATE_FILE"])
 host_name = os.environ.get("ARC_HOST_NAME", "unknown-host")
 notify_on_healthy = os.environ.get("ARC_NOTIFY_ON_HEALTHY", "true") == "true"
 stall_threshold = max(1, int(os.environ.get("ARC_STALL_THRESHOLD", "3")))
+low_memory_mib = max(1, int(os.environ.get("ARC_LOW_MEMORY_MIB", "512")))
+high_swap_mib = max(0, int(os.environ.get("ARC_HIGH_SWAP_MIB", "1024")))
 timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+cleanup_raw = os.environ.get("ARC_CLEANUP_JSON", "").strip()
 
 if healthcheck_raw:
     try:
@@ -77,6 +86,13 @@ if state_path.exists():
     except json.JSONDecodeError:
         previous_state = {}
 
+cleanup = {}
+if cleanup_raw:
+    try:
+        cleanup = json.loads(cleanup_raw)
+    except json.JSONDecodeError:
+        cleanup = {}
+
 gateway = healthcheck.get("gateway", {}) if isinstance(healthcheck, dict) else {}
 gateway_status = gateway.get("status") or "unknown"
 gateway_health = gateway.get("health") if isinstance(gateway, dict) else {}
@@ -99,12 +115,34 @@ workers = store.get("workers", []) if isinstance(store, dict) else []
 reviews = store.get("reviews", []) if isinstance(store, dict) else []
 runs = store.get("runs", []) if isinstance(store, dict) else []
 
+system = healthcheck.get("system", {}) if isinstance(healthcheck, dict) else {}
+memory_available = system.get("memoryAvailableMiB")
+swap_used = system.get("swapUsedMiB")
+cleanup_counts = cleanup.get("counts", {}) if isinstance(cleanup, dict) else {}
+
+def in_retry_backoff(task):
+    retry_after = task.get("retryAfter")
+    if not retry_after or task.get("status") in {"done", "cancelled"}:
+        return False
+    try:
+        retry_at = datetime.fromisoformat(str(retry_after).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return retry_at > datetime.now(timezone.utc)
+
 running_workers = [worker for worker in workers if worker.get("status") == "running"]
 active_tasks = [
-    task for task in tasks if task.get("status") in {"queued", "planning", "in_progress"}
+    task
+    for task in tasks
+    if task.get("status") in {"queued", "planning", "in_progress"} and not in_retry_backoff(task)
 ]
+retry_backoff_tasks = [task for task in tasks if in_retry_backoff(task)]
 blocked_tasks = [task for task in tasks if task.get("status") == "blocked"]
 pending_reviews = [review for review in reviews if review.get("status") == "pending"]
+blocked_by_class = Counter(
+    (task.get("lastFailureClass") or "operator-needed")
+    for task in blocked_tasks
+)
 
 previous_stall_checks = int(previous_state.get("stallChecks") or 0)
 stall_checks = previous_stall_checks + 1 if active_tasks and not running_workers else 0
@@ -124,6 +162,12 @@ if not gateway_ok:
     issues.append(f"gateway is not healthy ({gateway_status}/{gateway_health_status})")
 if claude_health != "healthy":
     issues.append(f"claude auth health is {claude_health}")
+if isinstance(memory_available, (int, float)) and memory_available < low_memory_mib:
+    issues.append(
+        f"memory pressure: {int(memory_available)} MiB available, threshold {low_memory_mib} MiB"
+    )
+if isinstance(swap_used, (int, float)) and swap_used > high_swap_mib:
+    issues.append(f"memory pressure: swap usage is {int(swap_used)} MiB")
 if stall_checks >= stall_threshold:
     issues.append(
         f"stalled queue: {len(active_tasks)} active tasks, 0 running workers for {stall_checks} consecutive checks"
@@ -141,9 +185,22 @@ signals = [
     f"- gateway: {gateway_status}/{gateway_health_status}",
     f"- claude: {claude_health}",
     f"- active tasks: {len(active_tasks)}",
+    f"- retry backoff: {len(retry_backoff_tasks)}",
     f"- running workers: {len(running_workers)}",
     f"- blocked tasks: {len(blocked_tasks)}",
+    "- blocked by class: "
+    + (
+        "none"
+        if not blocked_by_class
+        else ", ".join(
+            f"{failure_class}={count}" for failure_class, count in sorted(blocked_by_class.items())
+        )
+    ),
     f"- pending reviews: {len(pending_reviews)}",
+    "- cleanup candidates: "
+    + f"worktrees={cleanup_counts.get('worktrees', 0)}, "
+    + f"logs={cleanup_counts.get('logs', 0)}, "
+    + f"locks={cleanup_counts.get('locks', 0)}",
 ]
 
 status = "healthy" if not issues else "degraded"

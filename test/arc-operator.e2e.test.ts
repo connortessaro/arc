@@ -99,6 +99,13 @@ set -euo pipefail
 printf 'HEALTH\\n---\\nSUMMARY\\n'
 `,
   );
+  await makeExecutable(
+    path.join(scriptsDir, "cleanup.sh"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf 'CLEANUP %s\\n' "$*"
+`,
+  );
   return path.join(scriptsDir, "arc.sh");
 }
 
@@ -164,5 +171,21 @@ describe("arc operator wrapper", () => {
     expect(result.status).toBe(0);
     expect(result.stdout.match(/^HEALTH$/gm) ?? []).toHaveLength(1);
     expect(result.stdout).toContain("SUMMARY");
+  });
+
+  it("routes arc cleanup through the local cleanup script", async () => {
+    const localArcScript = await makeLocalFixture(tempRoots);
+    const result = spawnSync("/bin/bash", [localArcScript, "cleanup", "--keep-days", "14"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ARC_OPERATOR_MODE: "local",
+        PATH: "/usr/bin:/bin",
+      },
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("CLEANUP --keep-days 14");
   });
 });

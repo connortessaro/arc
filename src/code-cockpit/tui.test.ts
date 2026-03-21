@@ -74,6 +74,14 @@ function makeSummary(): CodeCockpitWorkspaceSummary {
     recentTasks: [],
     recentWorkers: [],
     pendingReviews: [makeReview()],
+    blockedTaskFailureCounts: {
+      "transient-runtime": 1,
+      "engine-auth": 0,
+      "engine-capacity": 0,
+      "task-error": 0,
+      "operator-needed": 0,
+    },
+    retryBackoffCount: 1,
     generatedAt: "2026-03-20T01:04:32.000Z",
     recentRuns: [
       {
@@ -114,6 +122,12 @@ describe("arc dashboard renderer", () => {
           claude: { health: "healthy" },
           codex: { health: "healthy" },
         },
+        system: {
+          memoryAvailableMiB: 2560,
+          swapUsedMiB: 320,
+          diskFreeGiB: 97.2,
+          gatewayRssMiB: 668,
+        },
       },
       statusMessage: "Ready. 1 active tasks · 1 items need attention.",
     });
@@ -139,6 +153,12 @@ describe("arc dashboard renderer", () => {
           claude: { health: "healthy" },
           codex: { health: "healthy" },
         },
+        system: {
+          memoryAvailableMiB: 2560,
+          swapUsedMiB: 320,
+          diskFreeGiB: 97.2,
+          gatewayRssMiB: 668,
+        },
       },
       statusMessage: "Ready. 0 active tasks · 1 items need attention.",
     });
@@ -148,5 +168,34 @@ describe("arc dashboard renderer", () => {
       overflow,
       overflow ? `overflowed line (${visibleWidth(overflow)}): ${overflow}` : "",
     ).toBeUndefined();
+  });
+
+  it("shows retry backoff, blocked failure classes, and memory headroom in the pulse panel", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask()],
+      reviews: [makeReview()],
+      health: {
+        gateway: { status: "active", port: "18789", health: { ok: true, status: "live" } },
+        engines: {
+          claude: { health: "healthy" },
+          codex: { health: "healthy" },
+        },
+        system: {
+          memoryAvailableMiB: 2560,
+          swapUsedMiB: 320,
+          diskFreeGiB: 97.2,
+          gatewayRssMiB: 668,
+        },
+      },
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("retry 1");
+    expect(rendered).toContain("blocked transient-runtime=1");
+    expect(rendered).toContain("mem 2560MiB");
   });
 });
