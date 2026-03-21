@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isWindows } from "../infra/platform.js";
 
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
@@ -40,7 +41,7 @@ export function resolvePowerShellPath(): string {
 }
 
 export function getShellConfig(): { shell: string; args: string[] } {
-  if (process.platform === "win32") {
+  if (isWindows) {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
@@ -107,7 +108,7 @@ export function detectRuntimeShell(): string | undefined {
     }
   }
 
-  if (process.platform === "win32") {
+  if (isWindows) {
     if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
       return "pwsh";
     }
@@ -168,7 +169,7 @@ export function sanitizeBinaryOutput(text: string): string {
 }
 
 export function killProcessTree(pid: number): void {
-  if (process.platform === "win32") {
+  if (isWindows) {
     try {
       spawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
         stdio: "ignore",

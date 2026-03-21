@@ -16,6 +16,7 @@ import {
   isPathInside,
   isSymlinkOpenError,
 } from "./path-guards.js";
+import { fdLinkPaths, isWindows, supportsNoFollow } from "./platform.js";
 
 export type SafeOpenErrorCode =
   | "invalid-path"
@@ -48,7 +49,7 @@ export type SafeLocalReadResult = {
   stat: Stats;
 };
 
-const SUPPORTS_NOFOLLOW = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
+const SUPPORTS_NOFOLLOW = supportsNoFollow && "O_NOFOLLOW" in fsConstants;
 const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
 const OPEN_WRITE_EXISTING_FLAGS =
   fsConstants.O_WRONLY | (SUPPORTS_NOFOLLOW ? fsConstants.O_NOFOLLOW : 0);
@@ -361,12 +362,7 @@ export async function resolveOpenedFileRealPathForHandle(
     }
   }
 
-  const fdCandidates =
-    process.platform === "linux"
-      ? [`/proc/self/fd/${handle.fd}`, `/dev/fd/${handle.fd}`]
-      : process.platform === "win32"
-        ? []
-        : [`/dev/fd/${handle.fd}`];
+  const fdCandidates = fdLinkPaths(handle.fd);
   for (const fdPath of fdCandidates) {
     try {
       return await fs.realpath(fdPath);
@@ -551,7 +547,7 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  if (process.platform === "win32") {
+  if (isWindows) {
     await writeFileWithinRootLegacy(params);
     return;
   }
@@ -608,7 +604,7 @@ export async function copyFileWithinRoot(params: {
   }
 
   try {
-    if (process.platform === "win32") {
+    if (isWindows) {
       await copyFileWithinRootLegacy(params, source);
       return;
     }

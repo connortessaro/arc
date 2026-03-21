@@ -11,7 +11,7 @@ import { resolveHomeDir } from "./paths.js";
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
-  platform: "darwin" | "linux" | "win32";
+  platform: import("../infra/platform.js").SupportedPlatform;
   label: string;
   detail: string;
   scope: "user" | "system";
