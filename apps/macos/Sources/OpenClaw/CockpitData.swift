@@ -214,6 +214,7 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let completedLanes: [CockpitLaneSummary]
 }
 
 extension CockpitGatewayStatus {
@@ -418,6 +419,42 @@ extension CockpitWorkspaceSummary {
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
+        ],
+        completedLanes: [
+            CockpitLaneSummary(
+                taskId: "task_done",
+                taskTitle: "Implement login flow",
+                workerId: "worker_done",
+                workerName: "login-lane",
+                lane: "worker",
+                status: "completed",
+                repoRoot: "/Users/tessaro/openclaw",
+                worktreePath: "/Users/tessaro/openclaw/.worktrees/code/login-lane",
+                branch: "code/task_done/login-lane",
+                objective: "Ship the login flow.",
+                backendId: "codex-cli",
+                activeRunId: nil,
+                updatedAt: "2026-03-19T12:40:00.000Z",
+                latestRun: CockpitRunSummary(
+                    id: "run_done",
+                    taskId: "task_done",
+                    workerId: "worker_done",
+                    status: "succeeded",
+                    summary: "Login flow implemented and tests pass.",
+                    backendId: "codex-cli",
+                    threadId: "thread_done",
+                    startedAt: "2026-03-19T12:30:00.000Z",
+                    finishedAt: "2026-03-19T12:40:00.000Z",
+                    terminationReason: nil,
+                    updatedAt: "2026-03-19T12:40:00.000Z"),
+                pendingReview: CockpitReviewSummary(
+                    id: "review_done",
+                    taskId: "task_done",
+                    workerId: "worker_done",
+                    title: "Review login flow",
+                    status: "pending",
+                    summary: "Ready for final review.",
+                    updatedAt: "2026-03-19T12:41:00.000Z")),
         ])
 }
 

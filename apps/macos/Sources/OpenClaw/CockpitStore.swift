@@ -7,6 +7,7 @@ typealias CockpitGatewayStatusLoader = @Sendable () async throws -> CockpitGatew
 typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerLogs
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
+typealias CockpitReviewResolvePerformer = @Sendable (_ reviewId: String, _ status: String) async throws -> Void
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
 
 enum CockpitLoadError: LocalizedError {
@@ -47,6 +48,7 @@ final class CockpitStore {
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
+    var isResolvingReview = false
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cockpit.ui")
     private let isPreview: Bool
@@ -55,6 +57,7 @@ final class CockpitStore {
     private let loadWorkerLogs: CockpitWorkerLogsLoader
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
+    private let resolveReviewImpl: CockpitReviewResolvePerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
 
     var selectedLane: CockpitLaneSummary? {
@@ -80,6 +83,7 @@ final class CockpitStore {
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
+        resolveReview: CockpitReviewResolvePerformer? = nil,
         reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
     {
         self.isPreview = isPreview
@@ -108,6 +112,9 @@ final class CockpitStore {
             case .cancel:
                 try await GatewayConnection.shared.codeWorkerCancel(workerId: workerId)
             }
+        }
+        self.resolveReviewImpl = resolveReview ?? { reviewId, status in
+            try await GatewayConnection.shared.codeReviewResolve(reviewId: reviewId, status: status)
         }
         self.reconnectRemoteGatewayImpl = reconnectRemoteGateway ?? {
             _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
@@ -188,6 +195,22 @@ final class CockpitStore {
     func selectWorker(_ workerId: String) async {
         self.selectedWorkerId = workerId
         await self.refreshSelectedWorkerLogs()
+    }
+
+    func resolveReview(reviewId: String, status: String) async {
+        guard !self.isResolvingReview else { return }
+        self.isResolvingReview = true
+        self.lastError = nil
+        defer { self.isResolvingReview = false }
+
+        do {
+            try await self.resolveReviewImpl(reviewId, status)
+            await self.refresh()
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit review resolve failed \(message, privacy: .public)")
+            self.lastError = message
+        }
     }
 
     func performWorkerAction(_ action: CockpitWorkerAction, workerId: String) async {

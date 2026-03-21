@@ -73,8 +73,13 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        CockpitCompletedSection(
+                            lanes: snapshot.completedLanes,
+                            store: self.store)
                         HStack(alignment: .top, spacing: 16) {
-                            CockpitReviewSection(reviews: snapshot.pendingReviews)
+                            CockpitReviewSection(
+                                reviews: snapshot.pendingReviews,
+                                store: self.store)
                             CockpitRunsSection(runs: snapshot.recentRuns)
                         }
                         CockpitTasksSection(tasks: snapshot.recentTasks)
@@ -456,6 +461,7 @@ private struct CockpitSelectedWorkerSection: View {
 
 private struct CockpitReviewSection: View {
     let reviews: [CockpitReviewSummary]
+    @Bindable var store: CockpitStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -474,9 +480,39 @@ private struct CockpitReviewSection: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
-                            Text(review.status)
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
+                            HStack(spacing: 8) {
+                                Text(review.status)
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                Spacer()
+                                Button {
+                                    Task { await self.store.resolveReview(reviewId: review.id, status: "approved") }
+                                } label: {
+                                    Label("Approve", systemImage: "checkmark.circle")
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.green)
+                                .controlSize(.small)
+                                .disabled(self.store.isResolvingReview)
+
+                                Button {
+                                    Task { await self.store.resolveReview(reviewId: review.id, status: "changes_requested") }
+                                } label: {
+                                    Label("Request Changes", systemImage: "arrow.uturn.backward.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(self.store.isResolvingReview)
+
+                                Button {
+                                    Task { await self.store.resolveReview(reviewId: review.id, status: "dismissed") }
+                                } label: {
+                                    Label("Dismiss", systemImage: "xmark.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .disabled(self.store.isResolvingReview)
+                            }
                         }
                         .padding(.bottom, 6)
                     }
@@ -489,6 +525,93 @@ private struct CockpitReviewSection: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CockpitCompletedSection: View {
+    let lanes: [CockpitLaneSummary]
+    @Bindable var store: CockpitStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Completed & Failed")
+                .font(.title3.weight(.semibold))
+            if self.lanes.isEmpty {
+                sectionPlaceholder("No completed or failed workers yet.")
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(self.lanes.prefix(6)) { lane in
+                        HStack(alignment: .top) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(lane.workerName)
+                                        .font(.headline)
+                                    Spacer()
+                                    Text(lane.status.replacingOccurrences(of: "_", with: " "))
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(lane.status == "completed" ? .green : .red)
+                                }
+                                Text(lane.taskTitle)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                if let branch = lane.branch {
+                                    Text(branch)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let run = lane.latestRun, let summary = run.summary, !summary.isEmpty {
+                                    Text(summary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let review = lane.pendingReview {
+                                    HStack(spacing: 8) {
+                                        Text("Review: \(review.title)")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                        Spacer()
+                                        Button {
+                                            Task { await self.store.resolveReview(reviewId: review.id, status: "approved") }
+                                        } label: {
+                                            Label("Approve", systemImage: "checkmark.circle")
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(.green)
+                                        .controlSize(.small)
+                                        .disabled(self.store.isResolvingReview)
+
+                                        Button {
+                                            Task { await self.store.resolveReview(reviewId: review.id, status: "changes_requested") }
+                                        } label: {
+                                            Label("Changes", systemImage: "arrow.uturn.backward.circle")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                        .disabled(self.store.isResolvingReview)
+                                    }
+                                }
+                                if lane.status == "failed" {
+                                    Button {
+                                        Task { await self.store.performWorkerAction(.start, workerId: lane.workerId) }
+                                    } label: {
+                                        Label("Retry", systemImage: "arrow.counterclockwise")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(self.store.isPerformingWorkerAction)
+                                }
+                            }
+                        }
+                        .padding(.bottom, 6)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.primary.opacity(0.04)))
+            }
+        }
     }
 }
 

@@ -34,6 +34,7 @@ Implemented:
 - native macOS cockpit window and menu entry
 - workspace summary RPC from gateway to native app
 - native worker controls and selected-worker log panel
+- review queue for completed/failed workers with approve/dismiss/changes-requested actions
 - remote gateway status banner with reconnect path
 - self-drive supervisor loop with Claude-first routing and Codex fallback
 - source-based VPS gateway runner and self-drive systemd installer
@@ -42,7 +43,6 @@ Implemented:
 
 Not implemented yet:
 
-- review queue UI
 - blocked / needs-input queue UI
 - diff/test/log review lane
 - full project/workspace persistence

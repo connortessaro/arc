@@ -10,7 +10,7 @@ workstation. Keep `docs/cockpit/TODO.md` as the longer backlog.
 
 Arc becomes the default daily surface when these are all done:
 
-- [ ] route completed, blocked, and needs-input work into clear queues
+- [x] route completed, blocked, and needs-input work into clear queues
 - [ ] inspect logs and latest run state in-app
 - [ ] review changed work in a dedicated lane without dropping to terminal
 - [ ] reopen the app without losing project context
@@ -21,7 +21,7 @@ Arc becomes the default daily surface when these are all done:
 - [x] Add selected worker detail panel
 - [x] Add selected worker log tail panel
 - [ ] Add blocked / needs-input queue
-- [ ] Add review-ready queue
+- [x] Add review-ready queue
 - [ ] Expose run summaries and review-ready artifacts from the gateway
 - [ ] Add diff/test/log review lane
 - [ ] Add workspace persistence

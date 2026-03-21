@@ -380,7 +380,7 @@ describe("code cockpit store", () => {
     expect(summary.retryBackoffCount).toBe(1);
   });
 
-  it("keeps failed workers in the lane summary so they stay manageable", async () => {
+  it("routes failed workers to completedLanes, not activeLanes", async () => {
     const storeModule = await importStoreModule();
     const task = await storeModule.createCodeTask({
       title: "Retry a failed worker",
@@ -402,7 +402,10 @@ describe("code cockpit store", () => {
 
     const summary = await storeModule.getCodeCockpitWorkspaceSummary();
 
-    expect(summary.activeLanes).toEqual(
+    expect(summary.activeLanes).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ workerId: worker.id })]),
+    );
+    expect(summary.completedLanes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           workerId: worker.id,
@@ -411,6 +414,35 @@ describe("code cockpit store", () => {
             id: run.id,
             status: "failed",
           }),
+        }),
+      ]),
+    );
+  });
+
+  it("routes completed workers to completedLanes", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Done task",
+      repoRoot: "/tmp/openclaw",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "done-worker",
+      status: "completed",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.activeLanes).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ workerId: worker.id })]),
+    );
+    expect(summary.completedLanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          workerId: worker.id,
+          status: "completed",
         }),
       ]),
     );
