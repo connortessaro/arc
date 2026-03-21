@@ -7,6 +7,7 @@ typealias CockpitGatewayStatusLoader = @Sendable () async throws -> CockpitGatew
 typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerLogs
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
+typealias CockpitPtySnapshotLoader = @Sendable (_ workerId: String) async throws -> CockpitPtySnapshot
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
 
 enum CockpitLoadError: LocalizedError {
@@ -47,12 +48,15 @@ final class CockpitStore {
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
+    var terminalStores: [String: CockpitTerminalStore] = [:]
+    var showTerminalLanes = true
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cockpit.ui")
     private let isPreview: Bool
     private let loadGatewayStatus: CockpitGatewayStatusLoader
     private let loadSummary: CockpitSummaryLoader
     private let loadWorkerLogs: CockpitWorkerLogsLoader
+    private let loadPtySnapshot: CockpitPtySnapshotLoader
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
@@ -78,6 +82,7 @@ final class CockpitStore {
         loadGatewayStatus: CockpitGatewayStatusLoader? = nil,
         loadSummary: CockpitSummaryLoader? = nil,
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
+        loadPtySnapshot: CockpitPtySnapshotLoader? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
         reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
@@ -93,6 +98,9 @@ final class CockpitStore {
         }
         self.loadWorkerLogs = loadWorkerLogs ?? { workerId in
             try await GatewayConnection.shared.codeWorkerLogs(workerId: workerId)
+        }
+        self.loadPtySnapshot = loadPtySnapshot ?? { workerId in
+            try await GatewayConnection.shared.codeWorkerPtySnapshot(workerId: workerId)
         }
         self.performSupervisorTickImpl = performSupervisorTick ?? { repoRoot in
             try await GatewayConnection.shared.codeSupervisorTick(repoRoot: repoRoot)
@@ -147,6 +155,7 @@ final class CockpitStore {
             self.snapshot = self.snapshot ?? .preview
             self.gatewayStatus = self.gatewayStatus ?? .previewLocal
             self.reconcileSelection()
+            self.reconcileTerminalStores()
             if let workerId = self.selectedWorkerId, self.selectedWorkerLogs == nil {
                 self.selectedWorkerLogs = .preview(workerId: workerId)
             }
@@ -161,6 +170,7 @@ final class CockpitStore {
             self.gatewayStatus = try await self.loadGatewayStatus()
             self.snapshot = try await self.loadSummary()
             self.reconcileSelection()
+            self.reconcileTerminalStores()
             await self.refreshSelectedWorkerLogs()
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -259,6 +269,47 @@ final class CockpitStore {
             return
         }
         self.selectedWorkerId = snapshot.activeLanes.first?.workerId
+    }
+
+    func reconcileTerminalStores() {
+        guard let snapshot = self.snapshot else {
+            for store in self.terminalStores.values { store.stopPolling() }
+            self.terminalStores.removeAll()
+            return
+        }
+
+        let activeLaneIds = Set(snapshot.activeLanes.map(\.workerId))
+
+        // Remove stores for lanes that no longer exist.
+        for (workerId, store) in self.terminalStores where !activeLaneIds.contains(workerId) {
+            store.stopPolling()
+            self.terminalStores.removeValue(forKey: workerId)
+        }
+
+        // Create stores for new lanes.
+        for lane in snapshot.activeLanes where self.terminalStores[lane.workerId] == nil {
+            let store = CockpitTerminalStore(
+                workerId: lane.workerId,
+                loadSnapshot: self.loadPtySnapshot)
+            self.terminalStores[lane.workerId] = store
+            if lane.status == "running" {
+                store.startPolling()
+            }
+        }
+
+        // Start/stop polling based on worker status.
+        for lane in snapshot.activeLanes {
+            guard let store = self.terminalStores[lane.workerId] else { continue }
+            if lane.status == "running" {
+                store.startPolling()
+            } else {
+                store.stopPolling()
+            }
+        }
+    }
+
+    func terminalStore(for workerId: String) -> CockpitTerminalStore? {
+        self.terminalStores[workerId]
     }
 
     private func refreshSelectedWorkerLogs() async {
