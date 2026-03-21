@@ -21,7 +21,7 @@ plane while internal code symbols still use `Cockpit*`.
 
 ## Next
 
-- [ ] Add review queue UI for completed and failed runs
+- [x] Add review queue UI for completed and failed runs
 - [ ] Add blocked / needs-input queue UI
 - [ ] Expose run summaries and review-ready artifacts from the gateway
 - [ ] Add diff/test/log review lane in the native window

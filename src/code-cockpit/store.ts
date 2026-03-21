@@ -227,6 +227,7 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   retryBackoffCount: number;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  completedLanes: CodeCockpitLaneSummary[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -1298,34 +1299,43 @@ export async function getCodeCockpitWorkspaceSummary(
     }
   }
 
-  const activeLanes = sortByUpdatedAt(store.workers)
-    .filter((worker) => worker.status !== "completed")
+  function toLane(worker: CodeWorkerSession): CodeCockpitLaneSummary | null {
+    const task = taskById.get(worker.taskId);
+    if (!task) {
+      return null;
+    }
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      workerId: worker.id,
+      workerName: worker.name,
+      lane: worker.lane,
+      status: worker.status,
+      repoRoot: worker.repoRoot ?? task.repoRoot,
+      worktreePath: worker.worktreePath,
+      branch: worker.branch,
+      objective: worker.objective,
+      backendId: worker.backendId,
+      activeRunId: worker.activeRunId,
+      updatedAt: worker.updatedAt,
+      latestRun: latestRunByWorker.get(worker.id) ?? null,
+      pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
+    };
+  }
+
+  const sortedWorkers = sortByUpdatedAt(store.workers);
+
+  const activeLanes = sortedWorkers
+    .filter((worker) => worker.status !== "completed" && worker.status !== "failed")
     .slice(0, 6)
-    .flatMap((worker): CodeCockpitLaneSummary[] => {
-      const task = taskById.get(worker.taskId);
-      if (!task) {
-        return [];
-      }
-      return [
-        {
-          taskId: task.id,
-          taskTitle: task.title,
-          workerId: worker.id,
-          workerName: worker.name,
-          lane: worker.lane,
-          status: worker.status,
-          repoRoot: worker.repoRoot ?? task.repoRoot,
-          worktreePath: worker.worktreePath,
-          branch: worker.branch,
-          objective: worker.objective,
-          backendId: worker.backendId,
-          activeRunId: worker.activeRunId,
-          updatedAt: worker.updatedAt,
-          latestRun: latestRunByWorker.get(worker.id) ?? null,
-          pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
-        },
-      ];
-    });
+    .map(toLane)
+    .filter((lane): lane is CodeCockpitLaneSummary => lane !== null);
+
+  const completedLanes = sortedWorkers
+    .filter((worker) => worker.status === "completed" || worker.status === "failed")
+    .slice(0, 6)
+    .map(toLane)
+    .filter((lane): lane is CodeCockpitLaneSummary => lane !== null);
 
   return {
     ...baseSummary,
@@ -1334,5 +1344,6 @@ export async function getCodeCockpitWorkspaceSummary(
     retryBackoffCount: store.tasks.filter((task) => isTaskInRetryBackoff(task, now)).length,
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    completedLanes,
   };
 }

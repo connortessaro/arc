@@ -104,6 +104,7 @@ actor GatewayConnection {
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
         case codeWorkerLogs = "code.worker.logs"
+        case codeReviewStatus = "code.review.status"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -845,6 +846,16 @@ extension GatewayConnection {
         try await self.requestDecoded(
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
+    }
+
+    func codeReviewResolve(reviewId: String, status: String) async throws {
+        try await self.requestVoid(
+            method: .codeReviewStatus,
+            params: [
+                "reviewId": AnyCodable(reviewId),
+                "status": AnyCodable(status),
+            ],
             timeoutMs: 10000)
     }
 
