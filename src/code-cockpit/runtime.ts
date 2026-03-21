@@ -114,6 +114,20 @@ type ActiveWorkerRun = {
   logWrite: Promise<void>;
 };
 
+export type PtyLogChunk = {
+  workerId: string;
+  stream: "stdout" | "stderr";
+  data: string;
+};
+
+export type PtyLogSubscriber = (chunk: PtyLogChunk) => void;
+
+type PtySubscription = {
+  id: string;
+  workerId: string;
+  listener: PtyLogSubscriber;
+};
+
 type PreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>>;
 
 export type CodeCockpitRuntimeDeps = {
@@ -685,6 +699,7 @@ class CodeCockpitRuntime {
   private readonly runCommandWithTimeout;
   private readonly now;
   private readonly activeRuns = new Map<string, ActiveWorkerRun>();
+  private readonly ptySubscribers = new Map<string, PtySubscription>();
   private initPromise: Promise<void> | null = null;
 
   constructor(deps: CodeCockpitRuntimeDeps = {}) {
@@ -785,6 +800,17 @@ class CodeCockpitRuntime {
         await fs.appendFile(logPath, chunk, "utf8");
       })
       .catch(() => {});
+
+    // Notify PTY log subscribers for this worker.
+    for (const sub of this.ptySubscribers.values()) {
+      if (sub.workerId === active.workerId) {
+        try {
+          sub.listener({ workerId: active.workerId, stream, data: chunk });
+        } catch {
+          // Subscriber errors must not disrupt the run.
+        }
+      }
+    }
   }
 
   private async bootstrapFastTodoTask(repoRoot: string): Promise<CodeTask | null> {
@@ -1558,6 +1584,41 @@ class CodeCockpitRuntime {
       worker,
       runs,
       reviews,
+    };
+  }
+
+  subscribePtyLogs(workerId: string, listener: PtyLogSubscriber): string {
+    const id = `pty_sub_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.ptySubscribers.set(id, { id, workerId, listener });
+    return id;
+  }
+
+  unsubscribePtyLogs(subscriptionId: string): void {
+    this.ptySubscribers.delete(subscriptionId);
+  }
+
+  isWorkerRunning(workerId: string): boolean {
+    return this.activeRuns.has(workerId);
+  }
+
+  async readWorkerPtySnapshot(params: {
+    workerId: string;
+  }): Promise<{ workerId: string; running: boolean; stdoutTail: string; stderrTail: string }> {
+    const active = this.activeRuns.get(params.workerId);
+    if (active) {
+      return {
+        workerId: params.workerId,
+        running: true,
+        stdoutTail: active.stdoutTail,
+        stderrTail: active.stderrTail,
+      };
+    }
+    const logs = await this.readWorkerLogs(params);
+    return {
+      workerId: params.workerId,
+      running: false,
+      stdoutTail: logs.stdoutTail,
+      stderrTail: logs.stderrTail,
     };
   }
 

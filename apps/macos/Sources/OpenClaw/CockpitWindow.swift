@@ -73,6 +73,11 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        if self.store.showTerminalLanes && !snapshot.activeLanes.isEmpty {
+                            CockpitTerminalLanesSection(
+                                lanes: snapshot.activeLanes,
+                                store: self.store)
+                        }
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
@@ -567,6 +572,49 @@ private struct CockpitTasksSection: View {
                         .fill(Color.primary.opacity(0.04)))
             }
         }
+    }
+}
+
+private struct CockpitTerminalLanesSection: View {
+    let lanes: [CockpitLaneSummary]
+    @Bindable var store: CockpitStore
+
+    private let columns = [
+        GridItem(.flexible(minimum: 360), spacing: 10),
+        GridItem(.flexible(minimum: 360), spacing: 10),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Terminal Lanes")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                Button {
+                    self.store.showTerminalLanes.toggle()
+                } label: {
+                    Label(
+                        self.store.showTerminalLanes ? "Hide" : "Show",
+                        systemImage: self.store.showTerminalLanes
+                            ? "terminal.fill" : "terminal")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            LazyVGrid(columns: self.columns, alignment: .leading, spacing: 10) {
+                ForEach(self.lanes) { lane in
+                    if let terminalStore = self.store.terminalStore(for: lane.workerId) {
+                        CockpitTerminalLane(
+                            workerId: lane.workerId,
+                            workerName: lane.workerName,
+                            status: lane.status,
+                            terminalStore: terminalStore)
+                        .frame(minHeight: 200, maxHeight: 320)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
