@@ -1,3 +1,5 @@
+import type { PlatformRegistry, SupportedPlatform } from "../infra/platform.js";
+import { isSupportedPlatform } from "../infra/platform.js";
 import {
   installLaunchAgent,
   isLaunchAgentLoaded,
@@ -91,9 +93,9 @@ export function describeGatewayServiceRestart(
   };
 }
 
-type SupportedGatewayServicePlatform = "darwin" | "linux" | "win32";
+type SupportedGatewayServicePlatform = SupportedPlatform;
 
-const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayService> = {
+const GATEWAY_SERVICE_REGISTRY: PlatformRegistry<GatewayService> = {
   darwin: {
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -135,7 +137,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
 function isSupportedGatewayServicePlatform(
   platform: NodeJS.Platform,
 ): platform is SupportedGatewayServicePlatform {
-  return Object.hasOwn(GATEWAY_SERVICE_REGISTRY, platform);
+  return isSupportedPlatform(platform);
 }
 
 export function resolveGatewayService(): GatewayService {

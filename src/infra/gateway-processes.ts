@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { procCmdlinePath } from "./platform.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 
 const WINDOWS_GATEWAY_DISCOVERY_TIMEOUT_MS = 5_000;
@@ -111,9 +112,10 @@ function readWindowsListeningPidsOnPortSync(port: number): number[] {
 }
 
 export function readGatewayProcessArgsSync(pid: number): string[] | null {
-  if (process.platform === "linux") {
+  const cmdlinePath = procCmdlinePath(pid);
+  if (cmdlinePath) {
     try {
-      return parseProcCmdline(fsSync.readFileSync(`/proc/${pid}/cmdline`, "utf8"));
+      return parseProcCmdline(fsSync.readFileSync(cmdlinePath, "utf8"));
     } catch {
       return null;
     }

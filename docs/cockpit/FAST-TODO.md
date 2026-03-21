@@ -43,7 +43,7 @@ Arc becomes the default daily surface when these are all done:
 
 - [ ] broad product polish for strangers
 - [ ] hosted-first architecture
-- [ ] generalized platform abstractions
+- [x] generalized platform abstractions
 - [ ] multi-user shared cockpit state
 - [ ] advanced memory / retrieval work
 - [ ] full-editor ambitions before the review workstation is strong
