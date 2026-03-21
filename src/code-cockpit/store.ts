@@ -13,7 +13,7 @@ import {
 
 export { CODE_TASK_FAILURE_CLASSES, type CodeTaskFailureClass } from "./task-reliability.js";
 
-export const CODE_COCKPIT_STORE_VERSION = 1;
+export const CODE_COCKPIT_STORE_VERSION = 2;
 
 export const CODE_TASK_STATUSES = [
   "queued",
@@ -54,6 +54,8 @@ export const CODE_CONTEXT_SNAPSHOT_KINDS = ["repo", "obsidian", "brief", "handof
 
 export const CODE_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 
+export const CODE_COCKPIT_SURFACES = ["app", "tui", "web", "cli"] as const;
+
 export type CodeTaskStatus = (typeof CODE_TASK_STATUSES)[number];
 export type CodeTaskPriority = (typeof CODE_TASK_PRIORITIES)[number];
 export type CodeWorkerStatus = (typeof CODE_WORKER_STATUSES)[number];
@@ -64,6 +66,22 @@ export type CodePullRequestState = (typeof CODE_PULL_REQUEST_STATES)[number];
 export type CodeReviewStatus = (typeof CODE_REVIEW_STATUSES)[number];
 export type CodeContextSnapshotKind = (typeof CODE_CONTEXT_SNAPSHOT_KINDS)[number];
 export type CodeRunStatus = (typeof CODE_RUN_STATUSES)[number];
+export type CodeCockpitSurface = (typeof CODE_COCKPIT_SURFACES)[number];
+
+export type CockpitUser = {
+  id: string;
+  displayName: string;
+  createdAt: string;
+};
+
+export type CockpitPresenceEntry = {
+  userId: string;
+  displayName: string;
+  clientId: string;
+  surface: CodeCockpitSurface;
+  connectedAt: string;
+  lastSeenAt: string;
+};
 
 export type CodeTask = {
   id: string;
@@ -75,6 +93,8 @@ export type CodeTask = {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+  updatedBy?: string;
   workerIds: string[];
   reviewIds: string[];
   lastFailureClass?: CodeTaskFailureClass;
@@ -113,6 +133,8 @@ export type CodeWorkerSession = {
   lastExitReason?: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+  updatedBy?: string;
 };
 
 export type CodeReviewRequest = {
@@ -125,6 +147,8 @@ export type CodeReviewRequest = {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  createdBy?: string;
+  updatedBy?: string;
 };
 
 export type CodeDecisionLog = {
@@ -134,6 +158,7 @@ export type CodeDecisionLog = {
   kind: string;
   summary: string;
   createdAt: string;
+  createdBy?: string;
 };
 
 export type CodeContextSnapshot = {
@@ -172,6 +197,7 @@ export type CodeRun = {
 
 export type CodeCockpitStore = {
   version: number;
+  revision: number;
   updatedAt: string;
   tasks: CodeTask[];
   workers: CodeWorkerSession[];
@@ -179,10 +205,13 @@ export type CodeCockpitStore = {
   decisions: CodeDecisionLog[];
   contextSnapshots: CodeContextSnapshot[];
   runs: CodeRun[];
+  users: CockpitUser[];
+  presence: CockpitPresenceEntry[];
 };
 
 export type CodeCockpitSummary = {
   storePath: string;
+  revision: number;
   totals: {
     tasks: number;
     workers: number;
@@ -197,6 +226,7 @@ export type CodeCockpitSummary = {
   recentTasks: CodeTask[];
   recentWorkers: CodeWorkerSession[];
   pendingReviews: CodeReviewRequest[];
+  activeUsers: CockpitPresenceEntry[];
 };
 
 export type CodeCockpitLaneSummary = {
@@ -239,6 +269,7 @@ export type CodeCockpitStoreOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   now?: () => Date;
+  actorId?: string;
 };
 
 export type CreateCodeTaskInput = {
@@ -348,6 +379,17 @@ export type UpdateCodeTaskInput = {
   lastOperatorHint?: string | null;
 };
 
+export type RegisterCockpitUserInput = {
+  displayName: string;
+};
+
+export type UpdateCockpitPresenceInput = {
+  userId: string;
+  clientId: string;
+  surface: CodeCockpitSurface;
+  displayName?: string;
+};
+
 export type UpdateCodeRunInput = {
   status?: CodeRunStatus;
   summary?: string | null;
@@ -408,6 +450,7 @@ const withStoreLock = createAsyncLock();
 function createEmptyStore(updatedAt: string): CodeCockpitStore {
   return {
     version: CODE_COCKPIT_STORE_VERSION,
+    revision: 0,
     updatedAt,
     tasks: [],
     workers: [],
@@ -415,6 +458,8 @@ function createEmptyStore(updatedAt: string): CodeCockpitStore {
     decisions: [],
     contextSnapshots: [],
     runs: [],
+    users: [],
+    presence: [],
   };
 }
 
@@ -459,6 +504,10 @@ function normalizeStore(
   }
   return {
     version: CODE_COCKPIT_STORE_VERSION,
+    revision:
+      typeof candidate.revision === "number" && Number.isFinite(candidate.revision)
+        ? candidate.revision
+        : 0,
     updatedAt:
       typeof candidate.updatedAt === "string" && candidate.updatedAt.length > 0
         ? candidate.updatedAt
@@ -469,6 +518,8 @@ function normalizeStore(
     decisions: Array.isArray(candidate.decisions) ? candidate.decisions : [],
     contextSnapshots: Array.isArray(candidate.contextSnapshots) ? candidate.contextSnapshots : [],
     runs: Array.isArray(candidate.runs) ? candidate.runs : [],
+    users: Array.isArray(candidate.users) ? candidate.users : [],
+    presence: Array.isArray(candidate.presence) ? candidate.presence : [],
   };
 }
 
@@ -589,6 +640,23 @@ function assertContextSnapshotKind(value: string): CodeContextSnapshotKind {
   );
 }
 
+// Presence entries older than this are considered stale and excluded from active lists.
+const PRESENCE_STALE_MS = 5 * 60_000;
+
+function filterActivePresence(entries: CockpitPresenceEntry[], now: Date): CockpitPresenceEntry[] {
+  const cutoff = new Date(now.getTime() - PRESENCE_STALE_MS).toISOString();
+  return entries.filter((entry) => entry.lastSeenAt >= cutoff);
+}
+
+function assertCockpitSurface(value: string): CodeCockpitSurface {
+  if ((CODE_COCKPIT_SURFACES as readonly string[]).includes(value)) {
+    return value as CodeCockpitSurface;
+  }
+  throw new Error(
+    `Invalid cockpit surface "${value}". Expected one of: ${CODE_COCKPIT_SURFACES.join(", ")}`,
+  );
+}
+
 function assertRunStatus(value: string): CodeRunStatus {
   if ((CODE_RUN_STATUSES as readonly string[]).includes(value)) {
     return value as CodeRunStatus;
@@ -636,16 +704,18 @@ function sortByUpdatedAt<T extends { updatedAt?: string; createdAt?: string }>(e
 
 async function mutateStore<T>(
   options: CodeCockpitStoreOptions | undefined,
-  mutator: (store: CodeCockpitStore, updatedAt: string) => T | Promise<T>,
+  mutator: (store: CodeCockpitStore, updatedAt: string, actorId?: string) => T | Promise<T>,
 ): Promise<T> {
   return await withStoreLock(async () => {
     const updatedAt = nowIso(options);
+    const actorId = normalizeString(options?.actorId);
     const storePath = resolveCodeCockpitStorePath(options);
     const current = normalizeStore(
       await readJsonFile<Partial<CodeCockpitStore>>(storePath),
       updatedAt,
     );
-    const result = await mutator(current, updatedAt);
+    const result = await mutator(current, updatedAt, actorId);
+    current.revision += 1;
     current.updatedAt = updatedAt;
     await writeJsonAtomic(storePath, current, {
       mode: 0o600,
@@ -681,7 +751,7 @@ export async function createCodeTask(
   }
   const status = assertTaskStatus(input.status ?? "queued");
   const priority = assertTaskPriority(input.priority ?? "normal");
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const task: CodeTask = {
       id: createId("task"),
       title: normalizeString(input.title) ?? "Untitled task",
@@ -692,6 +762,8 @@ export async function createCodeTask(
       notes: normalizeString(input.notes),
       createdAt: updatedAt,
       updatedAt,
+      createdBy: actorId,
+      updatedBy: actorId,
       workerIds: [],
       reviewIds: [],
       autoRetryCount: 0,
@@ -707,11 +779,14 @@ export async function updateCodeTaskStatus(
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeTask> {
   const status = assertTaskStatus(nextStatus);
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const task = findTask(store, taskId);
     assertTransition("task", TASK_TRANSITIONS, task.status, status);
     task.status = status;
     task.updatedAt = updatedAt;
+    if (actorId) {
+      task.updatedBy = actorId;
+    }
     return task;
   });
 }
@@ -721,7 +796,7 @@ export async function updateCodeTask(
   patch: UpdateCodeTaskInput,
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeTask> {
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const task = findTask(store, taskId);
     if (patch.priority !== undefined) {
       task.priority = patch.priority ? assertTaskPriority(patch.priority) : task.priority;
@@ -757,6 +832,9 @@ export async function updateCodeTask(
       task.lastOperatorHint = lastOperatorHint ?? undefined;
     }
     task.updatedAt = updatedAt;
+    if (actorId) {
+      task.updatedBy = actorId;
+    }
     return task;
   });
 }
@@ -774,7 +852,7 @@ export async function createCodeWorkerSession(
   const authHealth = input.authHealth
     ? assertWorkerAuthHealth(input.authHealth)
     : ("unknown" as const);
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const task = findTask(store, input.taskId);
     const worker: CodeWorkerSession = {
       id: createId("worker"),
@@ -792,6 +870,8 @@ export async function createCodeWorkerSession(
       authHealth,
       createdAt: updatedAt,
       updatedAt,
+      createdBy: actorId,
+      updatedBy: actorId,
     };
     store.workers.push(worker);
     if (!task.workerIds.includes(worker.id)) {
@@ -808,11 +888,14 @@ export async function updateCodeWorkerSessionStatus(
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeWorkerSession> {
   const status = assertWorkerStatus(nextStatus);
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const worker = findWorker(store, workerId);
     assertTransition("worker", WORKER_TRANSITIONS, worker.status, status);
     worker.status = status;
     worker.updatedAt = updatedAt;
+    if (actorId) {
+      worker.updatedBy = actorId;
+    }
     return worker;
   });
 }
@@ -822,7 +905,7 @@ export async function updateCodeWorkerSession(
   patch: UpdateCodeWorkerSessionInput,
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeWorkerSession> {
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const worker = findWorker(store, workerId);
 
     if (patch.status !== undefined) {
@@ -924,6 +1007,9 @@ export async function updateCodeWorkerSession(
       worker.lastExitReason = lastExitReason ?? undefined;
     }
     worker.updatedAt = updatedAt;
+    if (actorId) {
+      worker.updatedBy = actorId;
+    }
     return worker;
   });
 }
@@ -936,7 +1022,7 @@ export async function createCodeReviewRequest(
     throw new Error("Review title is required");
   }
   const status = assertReviewStatus(input.status ?? "pending");
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const task = findTask(store, input.taskId);
     if (input.workerId) {
       const worker = findWorker(store, input.workerId);
@@ -954,6 +1040,8 @@ export async function createCodeReviewRequest(
       notes: normalizeString(input.notes),
       createdAt: updatedAt,
       updatedAt,
+      createdBy: actorId,
+      updatedBy: actorId,
     };
     store.reviews.push(review);
     if (!task.reviewIds.includes(review.id)) {
@@ -985,11 +1073,14 @@ export async function resolveCodeReviewRequestStatus(
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeResolvedReviewResult> {
   const status = assertReviewStatus(nextStatus);
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     const review = findReview(store, reviewId);
     assertTransition("review", REVIEW_TRANSITIONS, review.status, status);
     review.status = status;
     review.updatedAt = updatedAt;
+    if (actorId) {
+      review.updatedBy = actorId;
+    }
 
     const task = findTask(store, review.taskId);
     const worker = review.workerId ? findWorker(store, review.workerId) : null;
@@ -998,26 +1089,41 @@ export async function resolveCodeReviewRequestStatus(
       assertTransition("task", TASK_TRANSITIONS, task.status, "done");
       task.status = "done";
       task.updatedAt = updatedAt;
+      if (actorId) {
+        task.updatedBy = actorId;
+      }
       if (worker) {
         assertTransition("worker", WORKER_TRANSITIONS, worker.status, "completed");
         worker.status = "completed";
         worker.updatedAt = updatedAt;
+        if (actorId) {
+          worker.updatedBy = actorId;
+        }
       }
     } else if (status === "changes_requested") {
       if (task.status === "review") {
         assertTransition("task", TASK_TRANSITIONS, task.status, "in_progress");
         task.status = "in_progress";
         task.updatedAt = updatedAt;
+        if (actorId) {
+          task.updatedBy = actorId;
+        }
       }
       if (worker) {
         assertTransition("worker", WORKER_TRANSITIONS, worker.status, "failed");
         worker.status = "failed";
         worker.updatedAt = updatedAt;
+        if (actorId) {
+          worker.updatedBy = actorId;
+        }
       }
     } else if (status === "dismissed") {
       assertTransition("task", TASK_TRANSITIONS, task.status, "cancelled");
       task.status = "cancelled";
       task.updatedAt = updatedAt;
+      if (actorId) {
+        task.updatedBy = actorId;
+      }
     }
 
     return { review, task, worker };
@@ -1034,7 +1140,7 @@ export async function appendCodeDecisionLog(
   if (!normalizeString(input.summary)) {
     throw new Error("Decision summary is required");
   }
-  return await mutateStore(options, (store, updatedAt) => {
+  return await mutateStore(options, (store, updatedAt, actorId) => {
     if (input.taskId) {
       findTask(store, input.taskId);
     }
@@ -1048,6 +1154,7 @@ export async function appendCodeDecisionLog(
       kind: normalizeString(input.kind) ?? "decision",
       summary: normalizeString(input.summary) ?? "",
       createdAt: updatedAt,
+      createdBy: actorId,
     };
     store.decisions.push(decision);
     return decision;
@@ -1243,9 +1350,11 @@ export async function getCodeCockpitSummary(
   options?: CodeCockpitStoreOptions,
 ): Promise<CodeCockpitSummary> {
   const store = await loadCodeCockpitStore(options);
+  const now = options?.now?.() ?? new Date();
 
   return {
     storePath: resolveCodeCockpitStorePath(options),
+    revision: store.revision,
     totals: {
       tasks: store.tasks.length,
       workers: store.workers.length,
@@ -1271,6 +1380,7 @@ export async function getCodeCockpitSummary(
     pendingReviews: sortByUpdatedAt(store.reviews)
       .filter((entry) => entry.status === "pending")
       .slice(0, 5),
+    activeUsers: filterActivePresence(store.presence, now),
   };
 }
 
@@ -1335,4 +1445,89 @@ export async function getCodeCockpitWorkspaceSummary(
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
   };
+}
+
+export async function registerCockpitUser(
+  input: RegisterCockpitUserInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CockpitUser> {
+  if (!normalizeString(input.displayName)) {
+    throw new Error("User display name is required");
+  }
+  return await mutateStore(options, (store, updatedAt) => {
+    const user: CockpitUser = {
+      id: createId("user"),
+      displayName: normalizeString(input.displayName) ?? "Unknown",
+      createdAt: updatedAt,
+    };
+    store.users.push(user);
+    return user;
+  });
+}
+
+export async function listCockpitUsers(options?: CodeCockpitStoreOptions): Promise<CockpitUser[]> {
+  const store = await loadCodeCockpitStore(options);
+  return store.users;
+}
+
+export async function updateCockpitPresence(
+  input: UpdateCockpitPresenceInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CockpitPresenceEntry> {
+  if (!normalizeString(input.userId)) {
+    throw new Error("userId is required");
+  }
+  if (!normalizeString(input.clientId)) {
+    throw new Error("clientId is required");
+  }
+  const surface = assertCockpitSurface(input.surface);
+  return await mutateStore(options, (store, updatedAt) => {
+    const user = store.users.find((u) => u.id === input.userId);
+    if (!user) {
+      throw new Error(`User "${input.userId}" not found`);
+    }
+    const displayName = normalizeString(input.displayName) ?? user.displayName;
+
+    // Upsert by clientId
+    const existing = store.presence.find((p) => p.clientId === input.clientId);
+    if (existing) {
+      existing.displayName = displayName;
+      existing.surface = surface;
+      existing.lastSeenAt = updatedAt;
+      return existing;
+    }
+
+    const entry: CockpitPresenceEntry = {
+      userId: user.id,
+      displayName,
+      clientId: input.clientId,
+      surface,
+      connectedAt: updatedAt,
+      lastSeenAt: updatedAt,
+    };
+    store.presence.push(entry);
+    return entry;
+  });
+}
+
+export async function listCockpitPresence(
+  options?: CodeCockpitStoreOptions,
+): Promise<CockpitPresenceEntry[]> {
+  const store = await loadCodeCockpitStore(options);
+  const now = options?.now?.() ?? new Date();
+  return filterActivePresence(store.presence, now);
+}
+
+export async function removeCockpitPresence(
+  clientId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<void> {
+  await mutateStore(options, (store) => {
+    store.presence = store.presence.filter((p) => p.clientId !== clientId);
+  });
+}
+
+export async function getStoreRevision(options?: CodeCockpitStoreOptions): Promise<number> {
+  const store = await loadCodeCockpitStore(options);
+  return store.revision;
 }

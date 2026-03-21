@@ -1,4 +1,12 @@
 import { getCodeCockpitRuntime } from "../../code-cockpit/runtime.js";
+import {
+  getStoreRevision,
+  listCockpitPresence,
+  listCockpitUsers,
+  registerCockpitUser,
+  removeCockpitPresence,
+  updateCockpitPresence,
+} from "../../code-cockpit/store.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -252,5 +260,39 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
           repoRoot: optionalRepoRoot(params.repoRoot),
         }),
     );
+  },
+  "code.user.register": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () =>
+      registerCockpitUser({
+        displayName: requireTitle(params.displayName, "displayName"),
+      }),
+    );
+  },
+  "code.user.list": async ({ respond }) => {
+    await withRuntimeResult(respond, async () => listCockpitUsers());
+  },
+  "code.presence.heartbeat": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () =>
+      updateCockpitPresence({
+        userId: requireTitle(params.userId, "userId"),
+        clientId: requireTitle(params.clientId, "clientId"),
+        surface: requireTitle(params.surface, "surface") as never,
+        displayName: optionalString(params.displayName),
+      }),
+    );
+  },
+  "code.presence.list": async ({ respond }) => {
+    await withRuntimeResult(respond, async () => listCockpitPresence());
+  },
+  "code.presence.disconnect": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () => {
+      await removeCockpitPresence(requireTitle(params.clientId, "clientId"));
+      return { ok: true };
+    });
+  },
+  "code.cockpit.revision": async ({ respond }) => {
+    await withRuntimeResult(respond, async () => ({
+      revision: await getStoreRevision(),
+    }));
   },
 };
