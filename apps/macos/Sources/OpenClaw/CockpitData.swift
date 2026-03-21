@@ -163,6 +163,11 @@ struct CockpitLaneSummary: Codable, Identifiable, Sendable {
     let objective: String?
     let backendId: String?
     let activeRunId: String?
+    let lastCommitHash: String?
+    let pushedBranch: String?
+    let pullRequestNumber: Int?
+    let pullRequestUrl: String?
+    let pullRequestState: String?
     let updatedAt: String
     let latestRun: CockpitRunSummary?
     let pendingReview: CockpitReviewSummary?
@@ -214,6 +219,7 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let reviewReadyLanes: [CockpitLaneSummary]?
 }
 
 extension CockpitGatewayStatus {
@@ -370,6 +376,11 @@ extension CockpitWorkspaceSummary {
                 objective: "Render native cockpit panels and menu entry.",
                 backendId: "codex-cli",
                 activeRunId: "run_shell",
+                lastCommitHash: nil,
+                pushedBranch: nil,
+                pullRequestNumber: nil,
+                pullRequestUrl: nil,
+                pullRequestState: nil,
                 updatedAt: "2026-03-19T12:58:00.000Z",
                 latestRun: CockpitRunSummary(
                     id: "run_shell",
@@ -404,6 +415,11 @@ extension CockpitWorkspaceSummary {
                 objective: "Validate recent diffs and smoke tests.",
                 backendId: "codex-cli",
                 activeRunId: nil,
+                lastCommitHash: nil,
+                pushedBranch: nil,
+                pullRequestNumber: nil,
+                pullRequestUrl: nil,
+                pullRequestState: nil,
                 updatedAt: "2026-03-19T12:52:00.000Z",
                 latestRun: CockpitRunSummary(
                     id: "run_review",
@@ -418,7 +434,8 @@ extension CockpitWorkspaceSummary {
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
-        ])
+        ],
+        reviewReadyLanes: nil)
 }
 
 extension CockpitWorkerLogs {

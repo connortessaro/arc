@@ -216,6 +216,11 @@ export type CodeCockpitLaneSummary = {
   commandPath?: string;
   authHealth?: CodeWorkerAuthHealth;
   activeRunId?: string;
+  lastCommitHash?: string;
+  pushedBranch?: string;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+  pullRequestState?: CodePullRequestState;
   updatedAt: string;
   latestRun: CodeRun | null;
   pendingReview: CodeReviewRequest | null;
@@ -227,6 +232,7 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   retryBackoffCount: number;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  reviewReadyLanes: CodeCockpitLaneSummary[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -1298,33 +1304,60 @@ export async function getCodeCockpitWorkspaceSummary(
     }
   }
 
+  const buildLaneSummary = (worker: CodeWorkerSession): CodeCockpitLaneSummary | null => {
+    const task = taskById.get(worker.taskId);
+    if (!task) {
+      return null;
+    }
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      workerId: worker.id,
+      workerName: worker.name,
+      lane: worker.lane,
+      status: worker.status,
+      repoRoot: worker.repoRoot ?? task.repoRoot,
+      worktreePath: worker.worktreePath,
+      branch: worker.branch,
+      objective: worker.objective,
+      backendId: worker.backendId,
+      activeRunId: worker.activeRunId,
+      lastCommitHash: worker.lastCommitHash,
+      pushedBranch: worker.pushedBranch,
+      pullRequestNumber: worker.pullRequestNumber,
+      pullRequestUrl: worker.pullRequestUrl,
+      pullRequestState: worker.pullRequestState,
+      updatedAt: worker.updatedAt,
+      latestRun: latestRunByWorker.get(worker.id) ?? null,
+      pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
+    };
+  };
+
   const activeLanes = sortByUpdatedAt(store.workers)
     .filter((worker) => worker.status !== "completed")
     .slice(0, 6)
     .flatMap((worker): CodeCockpitLaneSummary[] => {
-      const task = taskById.get(worker.taskId);
-      if (!task) {
-        return [];
-      }
-      return [
-        {
-          taskId: task.id,
-          taskTitle: task.title,
-          workerId: worker.id,
-          workerName: worker.name,
-          lane: worker.lane,
-          status: worker.status,
-          repoRoot: worker.repoRoot ?? task.repoRoot,
-          worktreePath: worker.worktreePath,
-          branch: worker.branch,
-          objective: worker.objective,
-          backendId: worker.backendId,
-          activeRunId: worker.activeRunId,
-          updatedAt: worker.updatedAt,
-          latestRun: latestRunByWorker.get(worker.id) ?? null,
-          pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
-        },
-      ];
+      const lane = buildLaneSummary(worker);
+      return lane ? [lane] : [];
+    });
+
+  const REVIEW_READY_STATUSES: Set<string> = new Set([
+    "awaiting_review",
+    "awaiting_approval",
+    "completed",
+  ]);
+  const activeLaneWorkerIds = new Set(activeLanes.map((lane) => lane.workerId));
+  const reviewReadyLanes = sortByUpdatedAt(store.workers)
+    .filter(
+      (worker) =>
+        REVIEW_READY_STATUSES.has(worker.status) &&
+        (worker.pullRequestUrl || worker.lastCommitHash) &&
+        !activeLaneWorkerIds.has(worker.id),
+    )
+    .slice(0, 8)
+    .flatMap((worker): CodeCockpitLaneSummary[] => {
+      const lane = buildLaneSummary(worker);
+      return lane ? [lane] : [];
     });
 
   return {
@@ -1334,5 +1367,6 @@ export async function getCodeCockpitWorkspaceSummary(
     retryBackoffCount: store.tasks.filter((task) => isTaskInRetryBackoff(task, now)).length,
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    reviewReadyLanes,
   };
 }

@@ -465,6 +465,26 @@ class ArcDashboardView implements Component {
       lines.push(theme.dim("Select a task or attention item."));
     }
 
+    const reviewReadyLanes = this.snapshot!.summary.reviewReadyLanes;
+    if (reviewReadyLanes.length > 0) {
+      lines.push("", renderPanelTitle("REVIEW READY", width, "alert"));
+      for (const lane of reviewReadyLanes.slice(0, 4)) {
+        const artifact = lane.pullRequestUrl
+          ? `PR #${lane.pullRequestNumber ?? "?"} (${lane.pullRequestState ?? "open"})`
+          : lane.lastCommitHash
+            ? `commit ${lane.lastCommitHash.slice(0, 8)}`
+            : "";
+        const runSummary = lane.latestRun?.summary?.trim() ?? "";
+        const detail = [artifact, runSummary].filter(Boolean).join(" · ");
+        lines.push(
+          ...renderWrappedBullet(
+            `${lane.taskTitle} · ${lane.workerName}${detail ? ` · ${detail}` : ""}`,
+            width,
+          ),
+        );
+      }
+    }
+
     lines.push("", renderPanelTitle("RECENT RUNS", width, "data"));
     const recentRuns = this.snapshot!.summary.recentRuns.slice(0, 3);
     if (recentRuns.length === 0) {
