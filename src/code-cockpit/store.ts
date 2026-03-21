@@ -3,6 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createAsyncLock, readJsonFile, writeJsonAtomic } from "../infra/json-files.js";
+import {
+  CODE_TASK_FAILURE_CLASSES,
+  type CodeTaskFailureClass,
+  isTaskInRetryBackoff,
+  normalizeTaskFailureClass,
+  summarizeBlockedTaskFailureCounts,
+} from "./task-reliability.js";
+
+export { CODE_TASK_FAILURE_CLASSES, type CodeTaskFailureClass } from "./task-reliability.js";
 
 export const CODE_COCKPIT_STORE_VERSION = 1;
 
@@ -68,6 +77,10 @@ export type CodeTask = {
   updatedAt: string;
   workerIds: string[];
   reviewIds: string[];
+  lastFailureClass?: CodeTaskFailureClass;
+  autoRetryCount?: number;
+  retryAfter?: string;
+  lastOperatorHint?: string;
 };
 
 export type CodeWorkerSession = {
@@ -210,6 +223,8 @@ export type CodeCockpitLaneSummary = {
 
 export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   generatedAt: string;
+  blockedTaskFailureCounts: Record<CodeTaskFailureClass, number>;
+  retryBackoffCount: number;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
 };
@@ -322,6 +337,17 @@ export type UpdateCodeWorkerSessionInput = {
   lastExitReason?: string | null;
 };
 
+export type UpdateCodeTaskInput = {
+  priority?: CodeTaskPriority | null;
+  repoRoot?: string | null;
+  goal?: string | null;
+  notes?: string | null;
+  lastFailureClass?: CodeTaskFailureClass | null;
+  autoRetryCount?: number | null;
+  retryAfter?: string | null;
+  lastOperatorHint?: string | null;
+};
+
 export type UpdateCodeRunInput = {
   status?: CodeRunStatus;
   summary?: string | null;
@@ -344,7 +370,7 @@ export type UpdateCodeRunInput = {
 const TASK_TRANSITIONS: Record<CodeTaskStatus, readonly CodeTaskStatus[]> = {
   queued: ["planning", "in_progress", "blocked", "cancelled"],
   planning: ["queued", "in_progress", "blocked", "cancelled"],
-  in_progress: ["review", "blocked", "done", "cancelled"],
+  in_progress: ["queued", "review", "blocked", "done", "cancelled"],
   review: ["in_progress", "blocked", "done", "cancelled"],
   blocked: ["planning", "in_progress", "review", "cancelled"],
   done: [],
@@ -409,6 +435,19 @@ function normalizePatchString(value: string | null | undefined): string | null |
     return null;
   }
   return normalizeString(value) ?? null;
+}
+
+function normalizeNonNegativeInteger(value: number | null | undefined): number | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return null;
+  }
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return Math.max(0, Math.trunc(value));
 }
 
 function normalizeStore(
@@ -655,6 +694,7 @@ export async function createCodeTask(
       updatedAt,
       workerIds: [],
       reviewIds: [],
+      autoRetryCount: 0,
     };
     store.tasks.push(task);
     return task;
@@ -671,6 +711,51 @@ export async function updateCodeTaskStatus(
     const task = findTask(store, taskId);
     assertTransition("task", TASK_TRANSITIONS, task.status, status);
     task.status = status;
+    task.updatedAt = updatedAt;
+    return task;
+  });
+}
+
+export async function updateCodeTask(
+  taskId: string,
+  patch: UpdateCodeTaskInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeTask> {
+  return await mutateStore(options, (store, updatedAt) => {
+    const task = findTask(store, taskId);
+    if (patch.priority !== undefined) {
+      task.priority = patch.priority ? assertTaskPriority(patch.priority) : task.priority;
+    }
+    const repoRoot = normalizePatchString(patch.repoRoot);
+    if (repoRoot !== undefined) {
+      task.repoRoot = repoRoot ?? undefined;
+    }
+    const goal = normalizePatchString(patch.goal);
+    if (goal !== undefined) {
+      task.goal = goal ?? undefined;
+    }
+    const notes = normalizePatchString(patch.notes);
+    if (notes !== undefined) {
+      task.notes = notes ?? undefined;
+    }
+    if (patch.lastFailureClass !== undefined) {
+      task.lastFailureClass =
+        patch.lastFailureClass === null
+          ? undefined
+          : (normalizeTaskFailureClass(patch.lastFailureClass) ?? undefined);
+    }
+    const autoRetryCount = normalizeNonNegativeInteger(patch.autoRetryCount);
+    if (autoRetryCount !== undefined) {
+      task.autoRetryCount = autoRetryCount ?? 0;
+    }
+    const retryAfter = normalizePatchString(patch.retryAfter);
+    if (retryAfter !== undefined) {
+      task.retryAfter = retryAfter ?? undefined;
+    }
+    const lastOperatorHint = normalizePatchString(patch.lastOperatorHint);
+    if (lastOperatorHint !== undefined) {
+      task.lastOperatorHint = lastOperatorHint ?? undefined;
+    }
     task.updatedAt = updatedAt;
     return task;
   });
@@ -1194,6 +1279,7 @@ export async function getCodeCockpitWorkspaceSummary(
 ): Promise<CodeCockpitWorkspaceSummary> {
   const store = await loadCodeCockpitStore(options);
   const baseSummary = await getCodeCockpitSummary(options);
+  const now = options?.now?.() ?? new Date();
   const taskById = new Map(store.tasks.map((task) => [task.id, task]));
   const latestRunByWorker = new Map<string, CodeRun>();
   for (const run of sortByUpdatedAt(store.runs)) {
@@ -1244,6 +1330,8 @@ export async function getCodeCockpitWorkspaceSummary(
   return {
     ...baseSummary,
     generatedAt: nowIso(options),
+    blockedTaskFailureCounts: summarizeBlockedTaskFailureCounts(store.tasks),
+    retryBackoffCount: store.tasks.filter((task) => isTaskInRetryBackoff(task, now)).length,
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
   };

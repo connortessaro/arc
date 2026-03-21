@@ -26,6 +26,7 @@ import type {
   CodeTask,
   CodeTaskStatus,
 } from "./store.js";
+import { isTaskInRetryBackoff } from "./task-reliability.js";
 
 type CodeCockpitTuiOptions = {
   repoRoot?: string;
@@ -50,6 +51,12 @@ type HealthcheckPayload = {
     health?: unknown;
   };
   engines?: Record<string, { health?: string }>;
+  system?: {
+    memoryAvailableMiB?: number;
+    swapUsedMiB?: number;
+    diskFreeGiB?: number;
+    gatewayRssMiB?: number;
+  };
 };
 
 type AttentionItem =
@@ -267,6 +274,7 @@ class ArcDashboardView implements Component {
     const gatewayStatus = health?.gateway?.status ?? "unknown";
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
+    const retryBackoffCount = summary.retryBackoffCount;
     const activeWorker = summary.activeLanes.find((lane) => lane.status === "running");
     const topLine = operatorColors.pulse.bold(
       `ARC OPERATOR CONSOLE · ${shortenHomePath(repoRoot)}`,
@@ -284,6 +292,11 @@ class ArcDashboardView implements Component {
         "attention",
         String(attentionItems.length),
         attentionItems.length > 0 ? "alert" : "muted",
+      ),
+      renderStatusChip(
+        "retry",
+        String(retryBackoffCount),
+        retryBackoffCount > 0 ? "data" : "muted",
       ),
       renderStatusChip("runs", String(summary.totals.runs), "data"),
       activeWorker
@@ -366,16 +379,40 @@ class ArcDashboardView implements Component {
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
     const activeWorker = summary.activeLanes.find((lane) => lane.status === "running");
+    const memoryAvailable = health?.system?.memoryAvailableMiB;
+    const swapUsed = health?.system?.swapUsedMiB;
+    const diskFree = health?.system?.diskFreeGiB;
+    const gatewayRss = health?.system?.gatewayRssMiB;
     lines.push(
       truncateToWidth(
         [
           `gateway ${gatewayStatus}`,
           `claude ${claudeHealth}`,
           `codex ${codexHealth}`,
+          `retry ${summary.retryBackoffCount}`,
           `active ${activeTasks.length}`,
           `attention ${attentionItems.length}`,
           `worker ${activeWorker?.workerName ?? "idle"}`,
         ].join(" | "),
+        width,
+      ),
+      truncateToWidth(
+        [
+          memoryAvailable != null ? `mem ${memoryAvailable}MiB` : null,
+          swapUsed != null ? `swap ${swapUsed}MiB` : null,
+          diskFree != null ? `disk ${diskFree}GiB` : null,
+          gatewayRss != null ? `rss ${gatewayRss}MiB` : null,
+        ]
+          .filter(Boolean)
+          .join(" | "),
+        width,
+      ),
+      truncateToWidth(
+        "blocked " +
+          Object.entries(summary.blockedTaskFailureCounts)
+            .filter(([, count]) => count > 0)
+            .map(([failureClass, count]) => `${failureClass}=${count}`)
+            .join(" "),
         width,
       ),
       "",
@@ -503,8 +540,9 @@ function buildDashboardSnapshot(
   health: HealthcheckPayload | null,
 ): DashboardSnapshot {
   const scopedReviews = reviews.filter((review) => tasks.some((task) => task.id === review.taskId));
-  const activeTasks = tasks.filter((task) =>
-    ["queued", "planning", "in_progress"].includes(task.status),
+  const activeTasks = tasks.filter(
+    (task) =>
+      ["queued", "planning", "in_progress"].includes(task.status) && !isTaskInRetryBackoff(task),
   );
   const blockedTasks = tasks.filter((task) => task.status === "blocked");
   const attentionItems: AttentionItem[] = [

@@ -734,7 +734,7 @@ describe("code cockpit runtime", () => {
     );
   });
 
-  it("marks failed unattended runs as blocked instead of retrying them automatically", async () => {
+  it("marks ordinary failed unattended runs as blocked with a task-error failure class", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
 
     const task = await store.createCodeTask({
@@ -786,10 +786,147 @@ describe("code cockpit runtime", () => {
     });
     expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
       status: "blocked",
+      lastFailureClass: "task-error",
+      lastOperatorHint: expect.stringContaining("Inspect the latest worker output"),
     });
     expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
       status: "failed",
       terminationReason: "failed",
+    });
+  });
+
+  it("requeues a transient runtime failure once with retry metadata and backoff", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    let currentTime = new Date("2026-03-20T00:00:00.000Z");
+
+    const task = await store.createCodeTask({
+      title: "Retry a transient Arc worker failure",
+      repoRoot: tempRepoRoot,
+      goal: "Automatically recover once from a no-output timeout",
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "Transient worker",
+      objective: "Trip the no-output timeout once",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+      now: () => currentTime,
+    });
+
+    const started = await runtime.startWorker({ workerId: worker.id });
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 1,
+      exitSignal: null,
+      durationMs: 40,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: true,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.workers.some(
+          (entry) => entry.id === worker.id && entry.status === "failed" && !entry.activeRunId,
+        ) &&
+        nextStore.tasks.some(
+          (entry) =>
+            entry.id === task.id &&
+            entry.status === "queued" &&
+            entry.lastFailureClass === "transient-runtime" &&
+            entry.autoRetryCount === 1 &&
+            entry.retryAfter === "2026-03-20T00:15:00.000Z",
+        ),
+    );
+
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "queued",
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      retryAfter: "2026-03-20T00:15:00.000Z",
+      lastOperatorHint: expect.stringContaining("Auto-retry scheduled"),
+    });
+    expect(refreshed.runs.find((entry) => entry.id === started.run.id)).toMatchObject({
+      status: "failed",
+      terminationReason: "no-output-timeout",
+    });
+  });
+
+  it("blocks a second transient runtime failure after the retry budget is exhausted", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    const currentTime = new Date("2026-03-20T00:30:00.000Z");
+
+    const task = await store.createCodeTask({
+      title: "Escalate repeated runtime failures",
+      repoRoot: tempRepoRoot,
+      goal: "Block after the second transient failure",
+    });
+    await store.updateCodeTask(task.id, {
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      retryAfter: "2026-03-20T00:15:00.000Z",
+      lastOperatorHint: "Auto-retry already used for this failure burst.",
+    });
+    const worker = await store.createCodeWorkerSession({
+      taskId: task.id,
+      name: "Second transient failure",
+      objective: "Fail again after the retry budget is exhausted",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: () => ({ id: "codex-cli", config: backend }),
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: runCommandWithTimeoutStub,
+      now: () => currentTime,
+    });
+
+    await runtime.startWorker({ workerId: worker.id });
+
+    pendingRuns[0]?.deferred.resolve({
+      reason: "exit",
+      exitCode: 1,
+      exitSignal: null,
+      durationMs: 40,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: true,
+    });
+
+    const refreshed = await waitForStoreState(
+      async () => await store.loadCodeCockpitStore(),
+      (nextStore) =>
+        nextStore.tasks.some(
+          (entry) =>
+            entry.id === task.id &&
+            entry.status === "blocked" &&
+            entry.lastFailureClass === "transient-runtime" &&
+            !entry.retryAfter,
+        ),
+    );
+
+    expect(refreshed.tasks.find((entry) => entry.id === task.id)).toMatchObject({
+      status: "blocked",
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      lastOperatorHint: expect.stringContaining("Automatic recovery already ran once"),
     });
   });
 
@@ -1281,15 +1418,15 @@ describe("code cockpit runtime", () => {
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["codex", "exec"]));
   });
 
-  it("blocks self-drive when a strict Claude engine is configured and Claude is unavailable", async () => {
+  it("backs off instead of blocking immediately when strict Claude is temporarily unavailable", async () => {
     const { supervisor, pendingRuns } = createSupervisorStub();
+    const currentTime = new Date("2026-03-20T00:00:00.000Z");
 
-    await fs.mkdir(path.join(tempRepoRoot, "docs", "cockpit"), { recursive: true });
-    await fs.writeFile(
-      path.join(tempRepoRoot, "docs", "cockpit", "FAST-TODO.md"),
-      "# Fast TODO\n\n- [ ] Review the remote auth loop\n",
-      "utf8",
-    );
+    const task = await store.createCodeTask({
+      title: "Review the remote auth loop",
+      repoRoot: tempRepoRoot,
+      goal: "Run only with Claude in strict engine mode",
+    });
 
     vi.stubEnv("ARC_SELF_DRIVE_STRICT_ENGINE", "claude");
 
@@ -1313,19 +1450,76 @@ describe("code cockpit runtime", () => {
         codexHealthy: true,
         claudeHealthy: false,
       }),
+      now: () => currentTime,
     });
 
     const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+    const refreshedTask = await store.getCodeTask(task.id);
 
     expect(result).toMatchObject({
       action: "noop",
       reason: "strict-engine-unhealthy:claude",
-      task: {
-        title: "Review the remote auth loop",
-        status: "blocked",
-      },
+    });
+    expect(refreshedTask).toMatchObject({
+      title: "Review the remote auth loop",
+      status: "queued",
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      retryAfter: "2026-03-20T00:15:00.000Z",
     });
     expect(pendingRuns).toHaveLength(0);
+  });
+
+  it("skips retrying tasks until their backoff expires and then starts them again", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+    let currentTime = new Date("2026-03-20T00:05:00.000Z");
+
+    const task = await store.createCodeTask({
+      title: "Resume work after transient runtime backoff",
+      repoRoot: tempRepoRoot,
+    });
+    await store.updateCodeTask(task.id, {
+      lastFailureClass: "transient-runtime",
+      autoRetryCount: 1,
+      retryAfter: "2026-03-20T00:15:00.000Z",
+      lastOperatorHint: "Auto-retry scheduled after a transient runtime failure.",
+    });
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+      now: () => currentTime,
+    });
+
+    const waiting = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+    expect(waiting).toMatchObject({ action: "noop", reason: "no-eligible-work" });
+    expect(pendingRuns).toHaveLength(0);
+
+    currentTime = new Date("2026-03-20T00:16:00.000Z");
+    const resumed = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(resumed).toMatchObject({
+      action: "started",
+      task: expect.objectContaining({ id: task.id }),
+    });
+    expect(pendingRuns).toHaveLength(1);
   });
 
   it("falls back to Codex when Claude recently failed with a usage-limit style auth error", async () => {
@@ -1581,7 +1775,7 @@ describe("code cockpit runtime", () => {
       reason: "preferred-engine-unhealthy:claude",
       task: {
         title: "[engine:claude] Review the remote auth loop",
-        status: "blocked",
+        status: "queued",
       },
     });
     expect(pendingRuns).toHaveLength(0);

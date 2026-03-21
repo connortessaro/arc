@@ -33,6 +33,11 @@ async function readLog(logPath: string) {
   }
 }
 
+async function touchOld(filePath: string, iso = "2026-03-10T00:00:00.000Z") {
+  const stamp = new Date(iso);
+  await fs.utimes(filePath, stamp, stamp);
+}
+
 async function writeCockpitStore(
   homeDir: string,
   params: {
@@ -398,6 +403,134 @@ describe("arc self-drive telegram monitoring", () => {
     const recoveredLog = await readLog(curlLog);
     expect((recoveredLog.match(/sendMessage/g) ?? []).length).toBe(2);
     expect(recoveredLog).toContain("Arc runtime recovered");
+  });
+
+  it("includes retry backoff, blocked failure classes, cleanup candidates, and memory pressure signals in alerts", async () => {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-rich-alert-"));
+    tempDirs.push(tempHome);
+
+    const { binDir, curlLog } = await installStubCommands(tempHome);
+    const envDir = path.join(tempHome, ".config", "arc-self-drive");
+    await fs.mkdir(envDir, { recursive: true });
+    await fs.writeFile(
+      path.join(envDir, "telegram-watchdog.env"),
+      [
+        "# Arc self-drive Telegram monitoring",
+        'ARC_TELEGRAM_BOT_TOKEN="123456:secret-token"',
+        'ARC_TELEGRAM_CHAT_ID="-1001234567890"',
+        'ARC_TELEGRAM_LOW_MEMORY_MIB="4096"',
+        'ARC_TELEGRAM_HIGH_SWAP_MIB="1"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const oldWorktree = path.join(tempHome, "repo", ".worktrees", "code", "cleanup-me");
+    await fs.mkdir(oldWorktree, { recursive: true });
+    await touchOld(oldWorktree);
+    const oldStdoutLog = path.join(tempHome, ".openclaw", "logs", "worker.stdout.log");
+    await fs.mkdir(path.dirname(oldStdoutLog), { recursive: true });
+    await fs.writeFile(oldStdoutLog, "old log\n", "utf8");
+    await touchOld(oldStdoutLog);
+
+    await writeCockpitStore(tempHome, {
+      tasks: [
+        {
+          id: "task_blocked",
+          title: "Inspect the blocked runtime failure",
+          status: "blocked",
+          priority: "high",
+          lastFailureClass: "transient-runtime",
+          lastOperatorHint: "Automatic recovery already ran once for this task.",
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+          workerIds: ["worker_cleanup"],
+          reviewIds: [],
+        },
+        {
+          id: "task_retry",
+          title: "Wait for the retry backoff",
+          status: "queued",
+          priority: "normal",
+          lastFailureClass: "transient-runtime",
+          autoRetryCount: 1,
+          retryAfter: "2099-03-21T00:15:00.000Z",
+          lastOperatorHint: "Auto-retry scheduled after a transient runtime failure.",
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+          workerIds: [],
+          reviewIds: [],
+        },
+        {
+          id: "task_done",
+          title: "Archive cleanup artifacts",
+          status: "done",
+          priority: "normal",
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+          workerIds: ["worker_cleanup"],
+          reviewIds: [],
+        },
+      ],
+      workers: [
+        {
+          id: "worker_cleanup",
+          taskId: "task_done",
+          name: "cleanup-worker",
+          status: "completed",
+          lane: "worker",
+          worktreePath: oldWorktree,
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+        },
+        {
+          id: "worker_blocked",
+          taskId: "task_blocked",
+          name: "blocked-worker",
+          status: "completed",
+          lane: "worker",
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+        },
+      ],
+      runs: [
+        {
+          id: "run_old_log",
+          taskId: "task_blocked",
+          workerId: "worker_blocked",
+          status: "failed",
+          terminationReason: "no-output-timeout",
+          stdoutLogPath: oldStdoutLog,
+          createdAt: "2026-03-20T23:00:00.000Z",
+          updatedAt: "2026-03-20T23:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = spawnSync("bash", [watchdogScript], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: tempHome,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        TEST_CLAUDE_LOGGED_IN: "0",
+        ARC_SELF_DRIVE_SYSTEM_METRICS_JSON: JSON.stringify({
+          memoryAvailableMiB: 2560,
+          swapUsedMiB: 320,
+          diskFreeGiB: 97.2,
+          gatewayRssMiB: 668,
+        }),
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    const curlCalls = await readLog(curlLog);
+    expect(curlCalls).toContain("Arc runtime alert");
+    expect(curlCalls).toContain("memory pressure");
+    expect(curlCalls).toContain("retry backoff: 1");
+    expect(curlCalls).toContain("blocked by class: transient-runtime=1");
+    expect(curlCalls).toContain("cleanup candidates: worktrees=1, logs=1, locks=0");
   });
 
   it("waits for repeated stalled-queue detections before alerting", async () => {

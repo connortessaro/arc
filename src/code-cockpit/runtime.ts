@@ -22,6 +22,7 @@ import {
   createCodeReviewRequest,
   createCodeRun,
   createCodeWorkerSession,
+  getCodeTask,
   getCodeCockpitWorkspaceSummary,
   getCodeRun,
   getCodeWorkerSession,
@@ -40,9 +41,11 @@ import {
   resolveCodeCockpitStorePath,
   resolveCodeReviewRequestStatus,
   updateCodeRun,
+  updateCodeTask,
   updateCodeTaskStatus,
   updateCodeWorkerSession,
 } from "./store.js";
+import { isTaskInRetryBackoff, resolveTaskFailure } from "./task-reliability.js";
 
 const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
 const DEFAULT_CLAUDE_WORKER_MODEL = "claude-opus-4-6";
@@ -829,6 +832,7 @@ class CodeCockpitRuntime {
       [...store.tasks]
         .filter((task) => taskMatchesRepo(task, params.repoRoot))
         .filter((task) => !["done", "cancelled", "review", "blocked"].includes(task.status))
+        .filter((task) => !isTaskInRetryBackoff(task, this.now()))
         .toSorted((left, right) => {
           const priorityDelta =
             (TASK_PRIORITY_ORDER[left.priority] ?? TASK_PRIORITY_ORDER.normal) -
@@ -844,7 +848,8 @@ class CodeCockpitRuntime {
         Boolean(
           task &&
           taskMatchesRepo(task, params.repoRoot) &&
-          !["done", "cancelled", "review", "blocked"].includes(task.status),
+          !["done", "cancelled", "review", "blocked"].includes(task.status) &&
+          !isTaskInRetryBackoff(task, this.now()),
         );
       const queuedWorker = [...store.workers]
         .filter((worker) => worker.status === "queued")
@@ -907,6 +912,9 @@ class CodeCockpitRuntime {
 
   private async markTaskInProgress(taskId: string) {
     await updateCodeTaskStatus(taskId, "in_progress").catch(() => undefined);
+    await updateCodeTask(taskId, {
+      retryAfter: null,
+    }).catch(() => undefined);
   }
 
   private buildBackendEnv(preparedBackend: PreparedBackend) {
@@ -1191,6 +1199,14 @@ class CodeCockpitRuntime {
       await updateCodeTaskStatus(params.taskId, publishedPr.error ? "blocked" : "done").catch(
         () => undefined,
       );
+      await updateCodeTask(params.taskId, {
+        lastFailureClass: publishedPr.error ? "operator-needed" : null,
+        autoRetryCount: 0,
+        retryAfter: null,
+        lastOperatorHint: publishedPr.error
+          ? "Draft PR publishing failed. Inspect GitHub state before retrying."
+          : null,
+      }).catch(() => undefined);
       return;
     }
 
@@ -1201,6 +1217,15 @@ class CodeCockpitRuntime {
         : params.exit.reason === "spawn-error"
           ? "spawn-error"
           : "failed";
+    const currentTask = await getCodeTask(params.taskId).catch(() => null);
+    const resolvedFailure = resolveTaskFailure({
+      terminationReason: failureReason,
+      authHealth: finishedAuthHealth,
+      summary: output.text,
+      stderr: params.exit.stderr,
+      priorAutoRetryCount: currentTask?.autoRetryCount,
+      now: this.now(),
+    });
     await updateCodeRun(params.localRunId, {
       status: "failed",
       finishedAt,
@@ -1224,7 +1249,16 @@ class CodeCockpitRuntime {
       lastExitedAt: finishedAt,
       lastExitReason: failureReason,
     });
-    await updateCodeTaskStatus(params.taskId, "blocked").catch(() => undefined);
+    await updateCodeTaskStatus(
+      params.taskId,
+      resolvedFailure.shouldAutoRetry ? "queued" : "blocked",
+    ).catch(() => undefined);
+    await updateCodeTask(params.taskId, {
+      lastFailureClass: resolvedFailure.failureClass,
+      autoRetryCount: resolvedFailure.autoRetryCount,
+      retryAfter: resolvedFailure.retryAfter ?? null,
+      lastOperatorHint: resolvedFailure.operatorHint,
+    }).catch(() => undefined);
   }
 
   private async launchWorkerTurn(params: StartCodeWorkerInput) {
@@ -1408,9 +1442,17 @@ class CodeCockpitRuntime {
         });
     } catch (error) {
       this.activeRuns.delete(worker.id);
+      const failureAt = nowIso(this.now);
+      const currentTask = await getCodeTask(task.id).catch(() => null);
+      const resolvedFailure = resolveTaskFailure({
+        terminationReason: "spawn-error",
+        stderr: error instanceof Error ? error.message : String(error),
+        priorAutoRetryCount: currentTask?.autoRetryCount,
+        now: this.now(),
+      });
       await updateCodeRun(queuedRun.id, {
         status: "failed",
-        finishedAt: nowIso(this.now),
+        finishedAt: failureAt,
         terminationReason: "spawn-error",
         stderrTail: error instanceof Error ? error.message : String(error),
       });
@@ -1423,11 +1465,21 @@ class CodeCockpitRuntime {
           stderr: error instanceof Error ? error.message : String(error),
           success: false,
         }),
-        lastAuthCheckedAt: nowIso(this.now),
+        lastAuthCheckedAt: failureAt,
         activeRunId: null,
-        lastExitedAt: nowIso(this.now),
+        lastExitedAt: failureAt,
         lastExitReason: "spawn-error",
       });
+      await updateCodeTaskStatus(
+        task.id,
+        resolvedFailure.shouldAutoRetry ? "queued" : "blocked",
+      ).catch(() => undefined);
+      await updateCodeTask(task.id, {
+        lastFailureClass: resolvedFailure.failureClass,
+        autoRetryCount: resolvedFailure.autoRetryCount,
+        retryAfter: resolvedFailure.retryAfter ?? null,
+        lastOperatorHint: resolvedFailure.operatorHint,
+      }).catch(() => undefined);
       throw error;
     }
 
@@ -1644,7 +1696,21 @@ class CodeCockpitRuntime {
     }
     const engineSelection = await this.resolveSupervisorEngine(candidate.task, selectedRepoRoot);
     if (!engineSelection.selected) {
-      await updateCodeTaskStatus(candidate.task.id, "blocked").catch(() => undefined);
+      const resolvedFailure = resolveTaskFailure({
+        engineSelectionReason: engineSelection.reason,
+        priorAutoRetryCount: candidate.task.autoRetryCount,
+        now: this.now(),
+      });
+      await updateCodeTaskStatus(
+        candidate.task.id,
+        resolvedFailure.shouldAutoRetry ? "queued" : "blocked",
+      ).catch(() => undefined);
+      await updateCodeTask(candidate.task.id, {
+        lastFailureClass: resolvedFailure.failureClass,
+        autoRetryCount: resolvedFailure.autoRetryCount,
+        retryAfter: resolvedFailure.retryAfter ?? null,
+        lastOperatorHint: resolvedFailure.operatorHint,
+      }).catch(() => undefined);
       const refreshedStore = await loadCodeCockpitStore();
       const blockedTask =
         refreshedStore.tasks.find((entry) => entry.id === candidate.task.id) ?? candidate.task;
