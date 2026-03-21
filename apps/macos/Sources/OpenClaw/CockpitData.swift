@@ -202,6 +202,12 @@ struct CockpitSupervisorTickResult: Codable, Sendable {
     let run: CockpitRunSummary?
 }
 
+struct CockpitWorkspaceState: Codable, Sendable {
+    let selectedWorkerId: String?
+    let lastProjectRoot: String?
+    let updatedAt: String?
+}
+
 struct CockpitWorkspaceSummary: Codable, Sendable {
     let storePath: String
     let generatedAt: String
