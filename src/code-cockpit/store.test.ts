@@ -415,4 +415,200 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("persists tags on context snapshots", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Tag test" });
+
+    const snapshot = await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Architecture notes",
+      body: "We use a layered store model.",
+      tags: ["architecture", "store", "Architecture"],
+    });
+
+    expect(snapshot.tags).toEqual(["architecture", "store"]);
+
+    const store = await storeModule.loadCodeCockpitStore();
+    const persisted = store.contextSnapshots.find((entry) => entry.id === snapshot.id);
+    expect(persisted?.tags).toEqual(["architecture", "store"]);
+  });
+
+  it("omits tags field when no tags are provided", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "No tag test" });
+
+    const snapshot = await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Simple note",
+      body: "No tags here.",
+    });
+
+    expect(snapshot.tags).toBeUndefined();
+  });
+
+  it("retrieves a single context snapshot by id", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Show test" });
+
+    const snapshot = await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "repo",
+      title: "Repo overview",
+      body: "The repo uses TypeScript ESM.",
+    });
+
+    const retrieved = await storeModule.getCodeContextSnapshot(snapshot.id);
+    expect(retrieved).toMatchObject({
+      id: snapshot.id,
+      title: "Repo overview",
+      kind: "repo",
+    });
+  });
+
+  it("throws when retrieving a non-existent snapshot", async () => {
+    const storeModule = await importStoreModule();
+    await expect(storeModule.getCodeContextSnapshot("memory_nonexistent")).rejects.toThrow(
+      'Memory "memory_nonexistent" not found',
+    );
+  });
+
+  it("searches context snapshots by text query with relevance scoring", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Search test" });
+
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Gateway architecture",
+      body: "The gateway uses RPC methods for communication.",
+    });
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "CLI commands",
+      body: "CLI commands parse arguments and delegate to runtime.",
+    });
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Gateway RPC protocol",
+      body: "RPC protocol uses JSON-RPC 2.0 over the gateway.",
+    });
+
+    const result = await storeModule.searchCodeContextSnapshots({
+      query: "gateway RPC",
+    });
+
+    expect(result.snapshots.length).toBe(2);
+    // The snapshot mentioning both "gateway" and "RPC" in title+body should rank highest.
+    expect(result.snapshots[0].title).toBe("Gateway RPC protocol");
+    expect(result.snapshots[0].score).toBeGreaterThan(0);
+    expect(result.snapshots[1].title).toBe("Gateway architecture");
+  });
+
+  it("filters search results by tags", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Tag filter test" });
+
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Tagged note",
+      body: "This has relevant tags.",
+      tags: ["infra", "gateway"],
+    });
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Untagged note",
+      body: "This also mentions gateway.",
+    });
+
+    const result = await storeModule.searchCodeContextSnapshots({
+      tags: ["gateway"],
+    });
+
+    expect(result.snapshots.length).toBe(1);
+    expect(result.snapshots[0].title).toBe("Tagged note");
+  });
+
+  it("retrieves context for a task with related snapshots ranked by relevance", async () => {
+    const storeModule = await importStoreModule();
+
+    const task = await storeModule.createCodeTask({
+      title: "Implement gateway health checks",
+      goal: "Add deep health probes to the gateway RPC layer",
+    });
+
+    // Direct task snapshot.
+    await storeModule.appendCodeContextSnapshot({
+      taskId: task.id,
+      kind: "brief",
+      title: "Health check design",
+      body: "Probe each backend via RPC ping.",
+    });
+
+    // Unrelated task with a relevant snapshot.
+    const otherTask = await storeModule.createCodeTask({ title: "Other work" });
+    await storeModule.appendCodeContextSnapshot({
+      taskId: otherTask.id,
+      kind: "repo",
+      title: "Gateway RPC internals",
+      body: "The gateway exposes health and status methods.",
+    });
+
+    // Completely unrelated snapshot.
+    await storeModule.appendCodeContextSnapshot({
+      taskId: otherTask.id,
+      kind: "brief",
+      title: "Mobile app styling",
+      body: "iOS uses SwiftUI with the Observation framework.",
+    });
+
+    const result = await storeModule.retrieveCodeContextForTask(task.id);
+
+    expect(result.taskSnapshots.length).toBe(1);
+    expect(result.taskSnapshots[0].title).toBe("Health check design");
+
+    expect(result.relatedSnapshots.length).toBe(1);
+    expect(result.relatedSnapshots[0].title).toBe("Gateway RPC internals");
+    expect(result.relatedSnapshots[0].score).toBeGreaterThan(0);
+  });
+
+  it("returns empty related snapshots when no matches exist", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Unique obscure topic",
+      goal: "Something with no related snapshots",
+    });
+
+    const result = await storeModule.retrieveCodeContextForTask(task.id);
+
+    expect(result.taskSnapshots).toEqual([]);
+    expect(result.relatedSnapshots).toEqual([]);
+  });
+
+  it("respects limit in search results", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "Limit test" });
+
+    for (let i = 0; i < 5; i++) {
+      await storeModule.appendCodeContextSnapshot({
+        taskId: task.id,
+        kind: "brief",
+        title: `Note about gateway ${i}`,
+        body: `Gateway detail number ${i}.`,
+      });
+    }
+
+    const result = await storeModule.searchCodeContextSnapshots({
+      query: "gateway",
+      limit: 2,
+    });
+
+    expect(result.snapshots.length).toBe(2);
+  });
 });
