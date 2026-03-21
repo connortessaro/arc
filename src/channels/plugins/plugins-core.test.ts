@@ -45,7 +45,7 @@ import {
   resolveChannelConfigWrites,
   resolveConfigWriteTargetFromPath,
 } from "./config-writes.js";
-import { listChannelPlugins } from "./index.js";
+import { listChannelPlugins, normalizeChannelId } from "./index.js";
 import { loadChannelPlugin } from "./load.js";
 import { loadChannelOutboundAdapter } from "./outbound/load.js";
 import type { ChannelDirectoryEntry, ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
@@ -112,6 +112,11 @@ describe("channel plugin registry", () => {
     setActivePluginRegistry(registry, "registry-test");
 
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["telegram"]);
+  });
+
+  it("normalizes built-in chat channels before plugins are loaded", () => {
+    expect(normalizeChannelId("telegram")).toBe("telegram");
+    expect(normalizeChannelId("imsg")).toBe("imessage");
   });
 });
 

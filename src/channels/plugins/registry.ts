@@ -2,7 +2,12 @@ import {
   getActivePluginRegistryVersion,
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { CHAT_CHANNEL_ORDER, type ChatChannelId, normalizeAnyChannelId } from "../registry.js";
+import {
+  CHAT_CHANNEL_ORDER,
+  type ChatChannelId,
+  normalizeAnyChannelId,
+  normalizeChatChannelId,
+} from "../registry.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 function dedupeChannels(channels: ChannelPlugin[]): ChannelPlugin[] {
@@ -78,5 +83,5 @@ export function getChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
 }
 
 export function normalizeChannelId(raw?: string | null): ChannelId | null {
-  return normalizeAnyChannelId(raw);
+  return normalizeAnyChannelId(raw) ?? normalizeChatChannelId(raw);
 }
