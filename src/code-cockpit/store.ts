@@ -212,6 +212,9 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   generatedAt: string;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  completedLanes: CodeCockpitLaneSummary[];
+  blockedLanes: CodeCockpitLaneSummary[];
+  needsInputLanes: CodeCockpitLaneSummary[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -1212,33 +1215,81 @@ export async function getCodeCockpitWorkspaceSummary(
     }
   }
 
-  const activeLanes = sortByUpdatedAt(store.workers)
-    .filter((worker) => worker.status !== "completed")
+  function toLaneSummary(worker: CodeWorkerSession): CodeCockpitLaneSummary | null {
+    const task = taskById.get(worker.taskId);
+    if (!task) {
+      return null;
+    }
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      workerId: worker.id,
+      workerName: worker.name,
+      lane: worker.lane,
+      status: worker.status,
+      repoRoot: worker.repoRoot ?? task.repoRoot,
+      worktreePath: worker.worktreePath,
+      branch: worker.branch,
+      objective: worker.objective,
+      backendId: worker.backendId,
+      activeRunId: worker.activeRunId,
+      updatedAt: worker.updatedAt,
+      latestRun: latestRunByWorker.get(worker.id) ?? null,
+      pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
+    };
+  }
+
+  const ACTIVE_STATUSES: ReadonlySet<CodeWorkerStatus> = new Set(["queued", "running"]);
+  const NEEDS_INPUT_STATUSES: ReadonlySet<CodeWorkerStatus> = new Set([
+    "awaiting_review",
+    "awaiting_approval",
+    "paused",
+  ]);
+  const COMPLETED_STATUSES: ReadonlySet<CodeWorkerStatus> = new Set([
+    "completed",
+    "failed",
+    "cancelled",
+  ]);
+
+  const sortedWorkers = sortByUpdatedAt(store.workers);
+
+  const activeLanes = sortedWorkers
+    .filter((w) => ACTIVE_STATUSES.has(w.status))
     .slice(0, 6)
-    .flatMap((worker): CodeCockpitLaneSummary[] => {
-      const task = taskById.get(worker.taskId);
-      if (!task) {
-        return [];
-      }
-      return [
-        {
-          taskId: task.id,
-          taskTitle: task.title,
-          workerId: worker.id,
-          workerName: worker.name,
-          lane: worker.lane,
-          status: worker.status,
-          repoRoot: worker.repoRoot ?? task.repoRoot,
-          worktreePath: worker.worktreePath,
-          branch: worker.branch,
-          objective: worker.objective,
-          backendId: worker.backendId,
-          activeRunId: worker.activeRunId,
-          updatedAt: worker.updatedAt,
-          latestRun: latestRunByWorker.get(worker.id) ?? null,
-          pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
-        },
-      ];
+    .flatMap((w) => {
+      const lane = toLaneSummary(w);
+      return lane ? [lane] : [];
+    });
+
+  const needsInputLanes = sortedWorkers
+    .filter(
+      (w) =>
+        NEEDS_INPUT_STATUSES.has(w.status) ||
+        (ACTIVE_STATUSES.has(w.status) && taskById.get(w.taskId)?.status === "blocked"),
+    )
+    .slice(0, 6)
+    .flatMap((w) => {
+      const lane = toLaneSummary(w);
+      return lane ? [lane] : [];
+    });
+
+  const blockedLanes = sortedWorkers
+    .filter((w) => {
+      const task = taskById.get(w.taskId);
+      return task?.status === "blocked" && !COMPLETED_STATUSES.has(w.status);
+    })
+    .slice(0, 6)
+    .flatMap((w) => {
+      const lane = toLaneSummary(w);
+      return lane ? [lane] : [];
+    });
+
+  const completedLanes = sortedWorkers
+    .filter((w) => COMPLETED_STATUSES.has(w.status))
+    .slice(0, 6)
+    .flatMap((w) => {
+      const lane = toLaneSummary(w);
+      return lane ? [lane] : [];
     });
 
   return {
@@ -1246,5 +1297,8 @@ export async function getCodeCockpitWorkspaceSummary(
     generatedAt: nowIso(options),
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    completedLanes,
+    blockedLanes,
+    needsInputLanes,
   };
 }

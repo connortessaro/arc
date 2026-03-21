@@ -59,10 +59,11 @@ final class CockpitStore {
 
     var selectedLane: CockpitLaneSummary? {
         guard let snapshot = self.snapshot else { return nil }
+        let allLanes = snapshot.activeLanes + snapshot.needsInputLanes + snapshot.blockedLanes + snapshot.completedLanes
         guard let selectedWorkerId = self.selectedWorkerId else {
-            return snapshot.activeLanes.first
+            return allLanes.first
         }
-        return snapshot.activeLanes.first(where: { $0.workerId == selectedWorkerId }) ?? snapshot.activeLanes.first
+        return allLanes.first(where: { $0.workerId == selectedWorkerId }) ?? allLanes.first
     }
 
     var projectRootLabel: String? {

@@ -63,6 +63,7 @@ type DashboardSnapshot = {
   reviews: CodeReviewRequest[];
   activeTasks: CodeTask[];
   attentionItems: AttentionItem[];
+  completedTasks: CodeTask[];
   health: HealthcheckPayload | null;
 };
 
@@ -84,7 +85,7 @@ export type ArcDashboardRenderInput = {
   statusMessage?: string;
 };
 
-type DashboardPane = "tasks" | "attention";
+type DashboardPane = "tasks" | "attention" | "completed";
 
 type DashboardActions = {
   onRefresh: () => void;
@@ -161,6 +162,7 @@ class ArcDashboardView implements Component {
   private selectedPane: DashboardPane = "tasks";
   private selectedTaskId: string | null = null;
   private selectedAttentionId: string | null = null;
+  private selectedCompletedId: string | null = null;
 
   constructor(private readonly actions: DashboardActions) {}
 
@@ -173,6 +175,10 @@ class ArcDashboardView implements Component {
     const fallbackAttentionId = snapshot.attentionItems[0]?.id ?? null;
     if (!snapshot.attentionItems.some((item) => item.id === this.selectedAttentionId)) {
       this.selectedAttentionId = fallbackAttentionId;
+    }
+    const fallbackCompletedId = snapshot.completedTasks[0]?.id ?? null;
+    if (!snapshot.completedTasks.some((task) => task.id === this.selectedCompletedId)) {
+      this.selectedCompletedId = fallbackCompletedId;
     }
     if (this.selectedPane === "tasks" && !this.selectedTaskId && this.selectedAttentionId) {
       this.selectedPane = "attention";
@@ -247,6 +253,8 @@ class ArcDashboardView implements Component {
       lines.push(`${left}${" ".repeat(columnGap)}${right}`);
     }
 
+    lines.push("", ...this.renderCompletedPane(width));
+
     lines.push("", ...this.renderDetails(width), "", theme.dim(this.statusMessage));
     return clampLinesToWidth(lines, width);
   }
@@ -263,7 +271,8 @@ class ArcDashboardView implements Component {
   }
 
   private renderHeader(width: number): string[] {
-    const { summary, health, repoRoot, activeTasks, attentionItems } = this.snapshot!;
+    const { summary, health, repoRoot, activeTasks, attentionItems, completedTasks } =
+      this.snapshot!;
     const gatewayStatus = health?.gateway?.status ?? "unknown";
     const claudeHealth = health?.engines?.claude?.health ?? "unknown";
     const codexHealth = health?.engines?.codex?.health ?? "unknown";
@@ -284,6 +293,11 @@ class ArcDashboardView implements Component {
         "attention",
         String(attentionItems.length),
         attentionItems.length > 0 ? "alert" : "muted",
+      ),
+      renderStatusChip(
+        "done",
+        String(completedTasks.length),
+        completedTasks.length > 0 ? "pulse" : "muted",
       ),
       renderStatusChip("runs", String(summary.totals.runs), "data"),
       activeWorker
@@ -359,6 +373,28 @@ class ArcDashboardView implements Component {
     return lines;
   }
 
+  private renderCompletedPane(width: number): string[] {
+    const title = renderPanelTitle(
+      "COMPLETED",
+      width,
+      this.selectedPane === "completed" ? "pulse" : "data",
+    );
+    const lines = [title];
+    const { completedTasks } = this.snapshot!;
+    if (completedTasks.length === 0) {
+      lines.push(theme.dim("  No completed tasks."));
+      return lines;
+    }
+    for (const task of completedTasks.slice(0, 6)) {
+      const selected = task.id === this.selectedCompletedId && this.selectedPane === "completed";
+      const prefix = selected ? theme.accent("›") : theme.dim("·");
+      const statusTag = task.status === "done" ? "done" : task.status;
+      const label = `${prefix} [${statusTag}] ${task.title}`;
+      lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
+    }
+    return lines;
+  }
+
   private renderDetails(width: number): string[] {
     const lines = [renderPanelTitle("SYSTEM PULSE", width, "pulse")];
     const { summary, health, attentionItems, activeTasks } = this.snapshot!;
@@ -388,6 +424,11 @@ class ArcDashboardView implements Component {
     const selectedAttention =
       this.selectedPane === "attention"
         ? (this.snapshot!.attentionItems.find((item) => item.id === this.selectedAttentionId) ??
+          null)
+        : null;
+    const selectedCompleted =
+      this.selectedPane === "completed"
+        ? (this.snapshot!.completedTasks.find((task) => task.id === this.selectedCompletedId) ??
           null)
         : null;
 
@@ -424,6 +465,14 @@ class ArcDashboardView implements Component {
           width,
         ),
       );
+    } else if (selectedCompleted) {
+      lines.push(
+        truncateToWidth(
+          `${selectedCompleted.title} · ${shortStatusLabel(selectedCompleted.status)} · ${selectedCompleted.priority}`,
+          width,
+        ),
+      );
+      lines.push(...renderWrappedBullet(taskGoal(selectedCompleted) ?? "Task completed.", width));
     } else {
       lines.push(theme.dim("Select a task or attention item."));
     }
@@ -453,16 +502,23 @@ class ArcDashboardView implements Component {
   }
 
   private togglePane() {
-    const nextPane: DashboardPane = this.selectedPane === "tasks" ? "attention" : "tasks";
-    if (nextPane === "attention" && !this.snapshot?.attentionItems.length) {
-      this.selectedPane = "tasks";
-      return;
+    const paneOrder: DashboardPane[] = ["tasks", "attention", "completed"];
+    const currentIndex = paneOrder.indexOf(this.selectedPane);
+    for (let offset = 1; offset < paneOrder.length; offset += 1) {
+      const candidate = paneOrder[(currentIndex + offset) % paneOrder.length];
+      if (candidate === "tasks" && this.snapshot?.activeTasks.length) {
+        this.selectedPane = candidate;
+        return;
+      }
+      if (candidate === "attention" && this.snapshot?.attentionItems.length) {
+        this.selectedPane = candidate;
+        return;
+      }
+      if (candidate === "completed" && this.snapshot?.completedTasks.length) {
+        this.selectedPane = candidate;
+        return;
+      }
     }
-    if (nextPane === "tasks" && !this.snapshot?.activeTasks.length) {
-      this.selectedPane = "attention";
-      return;
-    }
-    this.selectedPane = nextPane;
   }
 
   private moveSelection(delta: number) {
@@ -480,6 +536,19 @@ class ArcDashboardView implements Component {
       );
       const nextIndex = (currentIndex + delta + items.length) % items.length;
       this.selectedTaskId = items[nextIndex]?.id ?? this.selectedTaskId;
+      return;
+    }
+    if (this.selectedPane === "completed") {
+      const items = this.snapshot.completedTasks;
+      if (items.length === 0) {
+        return;
+      }
+      const currentIndex = Math.max(
+        0,
+        items.findIndex((task) => task.id === this.selectedCompletedId),
+      );
+      const nextIndex = (currentIndex + delta + items.length) % items.length;
+      this.selectedCompletedId = items[nextIndex]?.id ?? this.selectedCompletedId;
       return;
     }
     const items = this.snapshot.attentionItems;
@@ -507,6 +576,7 @@ function buildDashboardSnapshot(
     ["queued", "planning", "in_progress"].includes(task.status),
   );
   const blockedTasks = tasks.filter((task) => task.status === "blocked");
+  const completedTasks = tasks.filter((task) => ["done", "cancelled"].includes(task.status));
   const attentionItems: AttentionItem[] = [
     ...scopedReviews
       .filter((review) => review.status === "pending")
@@ -520,6 +590,7 @@ function buildDashboardSnapshot(
     reviews: scopedReviews,
     activeTasks,
     attentionItems,
+    completedTasks,
     health,
   };
 }
