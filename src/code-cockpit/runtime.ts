@@ -48,6 +48,8 @@ const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
 const DEFAULT_CLAUDE_WORKER_MODEL = "claude-opus-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
+const MAX_DIFF_CHARS = 120_000;
+const MAX_COMMIT_LOG_ENTRIES = 50;
 const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
 const FAST_TODO_RELATIVE_PATH = path.join("docs", "cockpit", "FAST-TODO.md");
 const ARC_SELF_DRIVE_COMMITTER_NAME = "Arc Self Drive";
@@ -142,6 +144,34 @@ export type ReadCodeWorkerLogsResult = {
   stderrTail: string;
 };
 
+export type CodeCommitEntry = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  author: string;
+  date: string;
+};
+
+export type ReadCodeWorkerDiffResult = {
+  workerId: string;
+  branch: string | null;
+  baseBranch: string;
+  worktreePath: string | null;
+  pullRequestUrl: string | null;
+  pullRequestState: string | null;
+  changedFiles: CodeChangedFile[];
+  unifiedDiff: string;
+  testOutput: string;
+  commitLog: CodeCommitEntry[];
+};
+
+export type CodeChangedFile = {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+};
+
 export type ListCodeTasksResult = {
   storePath: string;
   tasks: CodeTask[];
@@ -185,6 +215,49 @@ function nowIso(now: () => Date): string {
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function parseGitStatus(code: string): string {
+  const first = code.charAt(0);
+  switch (first) {
+    case "A":
+      return "added";
+    case "D":
+      return "deleted";
+    case "R":
+      return "renamed";
+    case "C":
+      return "copied";
+    default:
+      return "modified";
+  }
+}
+
+// Extract test runner output sections (vitest, jest, mocha patterns)
+function extractTestOutput(log: string): string {
+  const lines = log.split("\n");
+  const testLines: string[] = [];
+  let capturing = false;
+  for (const line of lines) {
+    if (
+      !capturing &&
+      (/^\s*(PASS|FAIL|✓|✗|✕|×|Tests?:|Test Suites?:)/i.test(line) ||
+        /vitest|jest|mocha|test.*result/i.test(line))
+    ) {
+      capturing = true;
+    }
+    if (capturing) {
+      testLines.push(line);
+      // Stop after a blank line following a summary
+      if (testLines.length > 2 && line.trim() === "") {
+        const prev = testLines[testLines.length - 2] ?? "";
+        if (/Tests?:|Test Suites?:|passed|failed/i.test(prev)) {
+          break;
+        }
+      }
+    }
+  }
+  return trimLogTail(testLines.join("\n"), MAX_LOG_TAIL_CHARS) ?? "";
 }
 
 function slugifyWorkerName(name: string): string {
@@ -1505,6 +1578,130 @@ class CodeCockpitRuntime {
       latestRun,
       stdoutTail: await readTail(latestRun?.stdoutLogPath, active?.stdoutTail),
       stderrTail: await readTail(latestRun?.stderrLogPath, active?.stderrTail),
+    };
+  }
+
+  async readWorkerDiff(params: { workerId: string }): Promise<ReadCodeWorkerDiffResult> {
+    const shown = await this.showWorker(params);
+    const { worker } = shown;
+    const worktreePath = worker.worktreePath ?? null;
+    const baseBranch = DEFAULT_GITHUB_BASE_BRANCH;
+
+    let changedFiles: CodeChangedFile[] = [];
+    let unifiedDiff = "";
+
+    if (worktreePath) {
+      try {
+        // Get list of changed files with stats relative to the base branch
+        const numstatResult = await this.runCommandWithTimeout(
+          "git",
+          ["diff", "--numstat", `${baseBranch}...HEAD`],
+          { cwd: worktreePath, timeoutMs: 15_000 },
+        );
+        if (numstatResult.code === 0 && numstatResult.stdout.trim()) {
+          const nameStatusResult = await this.runCommandWithTimeout(
+            "git",
+            ["diff", "--name-status", `${baseBranch}...HEAD`],
+            { cwd: worktreePath, timeoutMs: 15_000 },
+          );
+          const statusMap = new Map<string, string>();
+          if (nameStatusResult.code === 0) {
+            for (const line of nameStatusResult.stdout.trim().split("\n")) {
+              const [statusCode, ...fileParts] = line.split("\t");
+              const filePath = fileParts.join("\t");
+              if (statusCode && filePath) {
+                statusMap.set(filePath, parseGitStatus(statusCode));
+              }
+            }
+          }
+          changedFiles = numstatResult.stdout
+            .trim()
+            .split("\n")
+            .map((line) => {
+              const [addStr, delStr, ...fileParts] = line.split("\t");
+              const filePath = fileParts.join("\t");
+              return {
+                path: filePath,
+                status: statusMap.get(filePath) ?? "modified",
+                additions: addStr === "-" ? 0 : Number.parseInt(addStr ?? "0", 10),
+                deletions: delStr === "-" ? 0 : Number.parseInt(delStr ?? "0", 10),
+              };
+            })
+            .filter((entry) => entry.path);
+        }
+
+        // Get unified diff (capped to avoid huge payloads)
+        const diffResult = await this.runCommandWithTimeout(
+          "git",
+          ["diff", `${baseBranch}...HEAD`],
+          { cwd: worktreePath, timeoutMs: 30_000 },
+        );
+        if (diffResult.code === 0) {
+          unifiedDiff = trimLogTail(diffResult.stdout, MAX_DIFF_CHARS) ?? "";
+        }
+      } catch {
+        // Git not available or worktree gone - return empty diff
+      }
+    }
+
+    // Extract test output from logs if available
+    const latestRun = shown.runs[0] ?? null;
+    let testOutput = "";
+    if (latestRun?.stdoutLogPath) {
+      try {
+        const fullLog = await fs.readFile(latestRun.stdoutLogPath, "utf8");
+        testOutput = extractTestOutput(fullLog);
+      } catch {
+        // Log file gone
+      }
+    }
+
+    // Collect commit log for the branch relative to base
+    let commitLog: CodeCommitEntry[] = [];
+    if (worktreePath) {
+      try {
+        const logResult = await this.runCommandWithTimeout(
+          "git",
+          [
+            "log",
+            `${baseBranch}...HEAD`,
+            `--max-count=${MAX_COMMIT_LOG_ENTRIES}`,
+            "--format=%H%x00%h%x00%s%x00%an%x00%aI",
+          ],
+          { cwd: worktreePath, timeoutMs: 15_000 },
+        );
+        if (logResult.code === 0 && logResult.stdout.trim()) {
+          commitLog = logResult.stdout
+            .trim()
+            .split("\n")
+            .map((line) => {
+              const [sha, shortSha, subject, author, date] = line.split("\0");
+              return {
+                sha: sha ?? "",
+                shortSha: shortSha ?? "",
+                subject: subject ?? "",
+                author: author ?? "",
+                date: date ?? "",
+              };
+            })
+            .filter((entry) => entry.sha);
+        }
+      } catch {
+        // Git not available
+      }
+    }
+
+    return {
+      workerId: worker.id,
+      branch: worker.branch ?? null,
+      baseBranch,
+      worktreePath,
+      pullRequestUrl: worker.pullRequestUrl ?? null,
+      pullRequestState: worker.pullRequestState ?? null,
+      changedFiles,
+      unifiedDiff,
+      testOutput,
+      commitLog,
     };
   }
 

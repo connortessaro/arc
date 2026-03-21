@@ -5,8 +5,11 @@ import OSLog
 typealias CockpitSummaryLoader = @Sendable () async throws -> CockpitWorkspaceSummary
 typealias CockpitGatewayStatusLoader = @Sendable () async throws -> CockpitGatewayStatus
 typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerLogs
+typealias CockpitWorkerDiffLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerDiff
+typealias CockpitReviewResolver = @Sendable (_ reviewId: String, _ status: String) async throws -> CockpitReviewResolution
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
+typealias CockpitWorkerDetailLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerDetail
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
 
 enum CockpitLoadError: LocalizedError {
@@ -32,6 +35,13 @@ final class CockpitStore {
         store.selectedWorkerId = CockpitWorkspaceSummary.preview.activeLanes.first?.workerId
         if let workerId = store.selectedWorkerId {
             store.selectedWorkerLogs = .preview(workerId: workerId)
+            store.selectedWorkerDiff = .preview(workerId: workerId)
+        }
+        store.selectedFinishedWorkerId = CockpitWorkspaceSummary.preview.finishedLanes.first?.workerId
+        if let finishedId = store.selectedFinishedWorkerId {
+            store.finishedWorkerDetail = .preview(workerId: finishedId)
+            store.finishedWorkerDiff = .preview(workerId: finishedId)
+            store.finishedWorkerLogs = .preview(workerId: finishedId)
         }
         return store
     }
@@ -42,9 +52,19 @@ final class CockpitStore {
     var lastError: String?
     var selectedWorkerId: String?
     var selectedWorkerLogs: CockpitWorkerLogs?
+    var selectedWorkerDiff: CockpitWorkerDiff?
     var isLoadingWorkerLogs = false
+    var isLoadingWorkerDiff = false
+    var selectedFinishedWorkerId: String?
+    var finishedWorkerDiff: CockpitWorkerDiff?
+    var finishedWorkerLogs: CockpitWorkerLogs?
+    var finishedWorkerDetail: CockpitWorkerDetail?
+    var isLoadingFinishedDiff = false
+    var isLoadingFinishedLogs = false
+    var isLoadingFinishedDetail = false
     var isStartingNextWorker = false
     var isPerformingWorkerAction = false
+    var isResolvingReview = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
 
@@ -53,8 +73,11 @@ final class CockpitStore {
     private let loadGatewayStatus: CockpitGatewayStatusLoader
     private let loadSummary: CockpitSummaryLoader
     private let loadWorkerLogs: CockpitWorkerLogsLoader
+    private let loadWorkerDiff: CockpitWorkerDiffLoader
+    private let resolveReviewImpl: CockpitReviewResolver
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
+    private let loadWorkerDetail: CockpitWorkerDetailLoader
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
 
     var selectedLane: CockpitLaneSummary? {
@@ -73,11 +96,29 @@ final class CockpitStore {
         self.projectRootLabel != nil && self.gatewayStatus?.state == .ready
     }
 
+    var selectedFinishedLane: CockpitLaneSummary? {
+        guard let snapshot = self.snapshot else { return nil }
+        guard let selectedFinishedWorkerId = self.selectedFinishedWorkerId else {
+            return snapshot.finishedLanes.first
+        }
+        return snapshot.finishedLanes.first(where: { $0.workerId == selectedFinishedWorkerId })
+            ?? snapshot.finishedLanes.first
+    }
+
+    var selectedLaneNeedsReview: Bool {
+        guard let lane = self.selectedLane else { return false }
+        let reviewStatuses: Set<String> = ["awaiting_review", "completed", "awaiting_approval"]
+        return reviewStatuses.contains(lane.status) || lane.pendingReview != nil
+    }
+
     init(
         isPreview: Bool = ProcessInfo.processInfo.isPreview,
         loadGatewayStatus: CockpitGatewayStatusLoader? = nil,
         loadSummary: CockpitSummaryLoader? = nil,
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
+        loadWorkerDiff: CockpitWorkerDiffLoader? = nil,
+        loadWorkerDetail: CockpitWorkerDetailLoader? = nil,
+        resolveReview: CockpitReviewResolver? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
         reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
@@ -93,6 +134,15 @@ final class CockpitStore {
         }
         self.loadWorkerLogs = loadWorkerLogs ?? { workerId in
             try await GatewayConnection.shared.codeWorkerLogs(workerId: workerId)
+        }
+        self.loadWorkerDiff = loadWorkerDiff ?? { workerId in
+            try await GatewayConnection.shared.codeWorkerDiff(workerId: workerId)
+        }
+        self.loadWorkerDetail = loadWorkerDetail ?? { workerId in
+            try await GatewayConnection.shared.codeWorkerShow(workerId: workerId)
+        }
+        self.resolveReviewImpl = resolveReview ?? { reviewId, status in
+            try await GatewayConnection.shared.codeReviewStatus(reviewId: reviewId, status: status)
         }
         self.performSupervisorTickImpl = performSupervisorTick ?? { repoRoot in
             try await GatewayConnection.shared.codeSupervisorTick(repoRoot: repoRoot)
@@ -147,8 +197,24 @@ final class CockpitStore {
             self.snapshot = self.snapshot ?? .preview
             self.gatewayStatus = self.gatewayStatus ?? .previewLocal
             self.reconcileSelection()
-            if let workerId = self.selectedWorkerId, self.selectedWorkerLogs == nil {
-                self.selectedWorkerLogs = .preview(workerId: workerId)
+            if let workerId = self.selectedWorkerId {
+                if self.selectedWorkerLogs == nil {
+                    self.selectedWorkerLogs = .preview(workerId: workerId)
+                }
+                if self.selectedWorkerDiff == nil {
+                    self.selectedWorkerDiff = .preview(workerId: workerId)
+                }
+            }
+            if let finishedId = self.selectedFinishedWorkerId {
+                if self.finishedWorkerDetail == nil {
+                    self.finishedWorkerDetail = .preview(workerId: finishedId)
+                }
+                if self.finishedWorkerDiff == nil {
+                    self.finishedWorkerDiff = .preview(workerId: finishedId)
+                }
+                if self.finishedWorkerLogs == nil {
+                    self.finishedWorkerLogs = .preview(workerId: finishedId)
+                }
             }
             return
         }
@@ -162,6 +228,10 @@ final class CockpitStore {
             self.snapshot = try await self.loadSummary()
             self.reconcileSelection()
             await self.refreshSelectedWorkerLogs()
+            await self.refreshSelectedWorkerDiff()
+            await self.refreshFinishedWorkerDetail()
+            await self.refreshFinishedWorkerDiff()
+            await self.refreshFinishedWorkerLogs()
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.logger.error("code cockpit summary failed \(message, privacy: .public)")
@@ -188,6 +258,38 @@ final class CockpitStore {
     func selectWorker(_ workerId: String) async {
         self.selectedWorkerId = workerId
         await self.refreshSelectedWorkerLogs()
+        await self.refreshSelectedWorkerDiff()
+    }
+
+    func loadDiffForSelectedWorker() async {
+        await self.refreshSelectedWorkerDiff()
+    }
+
+    func selectFinishedWorker(_ workerId: String) async {
+        self.selectedFinishedWorkerId = workerId
+        await self.refreshFinishedWorkerDetail()
+        await self.refreshFinishedWorkerDiff()
+        await self.refreshFinishedWorkerLogs()
+    }
+
+    func reloadFinishedWorkerDiff() async {
+        await self.refreshFinishedWorkerDiff()
+    }
+
+    func resolveReview(_ action: CockpitReviewAction, reviewId: String) async {
+        guard !self.isResolvingReview else { return }
+        self.isResolvingReview = true
+        self.lastError = nil
+        defer { self.isResolvingReview = false }
+
+        do {
+            _ = try await self.resolveReviewImpl(reviewId, action.apiStatus)
+            await self.refresh()
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit review resolve failed \(message, privacy: .public)")
+            self.lastError = message
+        }
     }
 
     func performWorkerAction(_ action: CockpitWorkerAction, workerId: String) async {
@@ -247,18 +349,116 @@ final class CockpitStore {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func refreshFinishedWorkerDetail() async {
+        guard let workerId = self.selectedFinishedWorkerId else {
+            self.finishedWorkerDetail = nil
+            return
+        }
+        if self.isPreview {
+            self.finishedWorkerDetail = CockpitWorkerDetail.preview(workerId: workerId)
+            return
+        }
+
+        self.isLoadingFinishedDetail = true
+        defer { self.isLoadingFinishedDetail = false }
+
+        do {
+            self.finishedWorkerDetail = try await self.loadWorkerDetail(workerId)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit finished worker detail failed \(message, privacy: .public)")
+        }
+    }
+
+    private func refreshFinishedWorkerDiff() async {
+        guard let workerId = self.selectedFinishedWorkerId else {
+            self.finishedWorkerDiff = nil
+            return
+        }
+        if self.isPreview {
+            self.finishedWorkerDiff = .preview(workerId: workerId)
+            return
+        }
+
+        self.isLoadingFinishedDiff = true
+        defer { self.isLoadingFinishedDiff = false }
+
+        do {
+            self.finishedWorkerDiff = try await self.loadWorkerDiff(workerId)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit finished worker diff failed \(message, privacy: .public)")
+        }
+    }
+
+    private func refreshFinishedWorkerLogs() async {
+        guard let workerId = self.selectedFinishedWorkerId else {
+            self.finishedWorkerLogs = nil
+            return
+        }
+        if self.isPreview {
+            self.finishedWorkerLogs = .preview(workerId: workerId)
+            return
+        }
+
+        self.isLoadingFinishedLogs = true
+        defer { self.isLoadingFinishedLogs = false }
+
+        do {
+            self.finishedWorkerLogs = try await self.loadWorkerLogs(workerId)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit finished worker logs failed \(message, privacy: .public)")
+        }
+    }
+
+    private func refreshSelectedWorkerDiff() async {
+        guard let workerId = self.selectedWorkerId else {
+            self.selectedWorkerDiff = nil
+            return
+        }
+        if self.isPreview {
+            self.selectedWorkerDiff = .preview(workerId: workerId)
+            return
+        }
+
+        self.isLoadingWorkerDiff = true
+        defer { self.isLoadingWorkerDiff = false }
+
+        do {
+            self.selectedWorkerDiff = try await self.loadWorkerDiff(workerId)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit worker diff failed \(message, privacy: .public)")
+            // Don't set lastError for diff failures - non-critical
+        }
+    }
+
     private func reconcileSelection() {
         guard let snapshot = self.snapshot else {
             self.selectedWorkerId = nil
             self.selectedWorkerLogs = nil
+            self.selectedWorkerDiff = nil
+            self.selectedFinishedWorkerId = nil
+            self.finishedWorkerDiff = nil
+            self.finishedWorkerLogs = nil
+            self.finishedWorkerDetail = nil
             return
         }
         if let selectedWorkerId = self.selectedWorkerId,
            snapshot.activeLanes.contains(where: { $0.workerId == selectedWorkerId })
         {
-            return
+            // keep current active selection
+        } else {
+            self.selectedWorkerId = snapshot.activeLanes.first?.workerId
         }
-        self.selectedWorkerId = snapshot.activeLanes.first?.workerId
+        if let selectedFinishedWorkerId = self.selectedFinishedWorkerId,
+           snapshot.finishedLanes.contains(where: { $0.workerId == selectedFinishedWorkerId })
+        {
+            // keep current finished selection
+        } else {
+            self.selectedFinishedWorkerId = snapshot.finishedLanes.first?.workerId
+        }
     }
 
     private func refreshSelectedWorkerLogs() async {

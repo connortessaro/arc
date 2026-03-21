@@ -103,7 +103,10 @@ actor GatewayConnection {
         case codeWorkerPause = "code.worker.pause"
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
+        case codeWorkerShow = "code.worker.show"
         case codeWorkerLogs = "code.worker.logs"
+        case codeWorkerDiff = "code.worker.diff"
+        case codeReviewStatus = "code.review.status"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -841,10 +844,34 @@ extension GatewayConnection {
             timeoutMs: 15000)
     }
 
+    func codeWorkerShow(workerId: String) async throws -> CockpitWorkerDetail {
+        try await self.requestDecoded(
+            method: .codeWorkerShow,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
+    }
+
     func codeWorkerLogs(workerId: String) async throws -> CockpitWorkerLogs {
         try await self.requestDecoded(
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
+    }
+
+    func codeWorkerDiff(workerId: String) async throws -> CockpitWorkerDiff {
+        try await self.requestDecoded(
+            method: .codeWorkerDiff,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 30000)
+    }
+
+    func codeReviewStatus(reviewId: String, status: String) async throws -> CockpitReviewResolution {
+        try await self.requestDecoded(
+            method: .codeReviewStatus,
+            params: [
+                "reviewId": AnyCodable(reviewId),
+                "status": AnyCodable(status),
+            ],
             timeoutMs: 10000)
     }
 

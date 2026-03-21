@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 enum CockpitWorkerAction: String, CaseIterable, Codable, Sendable, Equatable, Identifiable {
     case start
@@ -194,6 +195,91 @@ struct CockpitWorkerLogs: Codable, Sendable {
     let stderrTail: String
 }
 
+struct CockpitChangedFile: Codable, Identifiable, Sendable {
+    let path: String
+    let status: String
+    let additions: Int
+    let deletions: Int
+
+    var id: String { self.path }
+}
+
+struct CockpitCommitEntry: Codable, Identifiable, Sendable {
+    let sha: String
+    let shortSha: String
+    let subject: String
+    let author: String
+    let date: String
+
+    var id: String { self.sha }
+}
+
+struct CockpitWorkerDiff: Codable, Sendable {
+    let workerId: String
+    let branch: String?
+    let baseBranch: String
+    let worktreePath: String?
+    let pullRequestUrl: String?
+    let pullRequestState: String?
+    let changedFiles: [CockpitChangedFile]
+    let unifiedDiff: String
+    let testOutput: String
+    let commitLog: [CockpitCommitEntry]?
+}
+
+struct CockpitWorkerDetail: Codable, Sendable {
+    let storePath: String
+    let task: CockpitTaskSummary
+    let worker: CockpitWorkerSummary
+    let runs: [CockpitRunSummary]
+    let reviews: [CockpitReviewSummary]
+}
+
+struct CockpitReviewResolution: Codable, Sendable {
+    let review: CockpitReviewSummary
+    let task: CockpitTaskSummary
+}
+
+enum CockpitReviewAction: String, CaseIterable, Codable, Sendable, Equatable, Identifiable {
+    case approve
+    case requestChanges = "changes_requested"
+    case dismiss = "dismissed"
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .approve: "Approve"
+        case .requestChanges: "Request Changes"
+        case .dismiss: "Dismiss"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .approve: "checkmark.seal.fill"
+        case .requestChanges: "arrow.uturn.backward.circle.fill"
+        case .dismiss: "xmark.circle.fill"
+        }
+    }
+
+    var apiStatus: String {
+        switch self {
+        case .approve: "approved"
+        case .requestChanges: "changes_requested"
+        case .dismiss: "dismissed"
+        }
+    }
+
+    var tintColor: SwiftUI.Color {
+        switch self {
+        case .approve: .green
+        case .requestChanges: .orange
+        case .dismiss: .red
+        }
+    }
+}
+
 struct CockpitSupervisorTickResult: Codable, Sendable {
     let action: String
     let reason: String?
@@ -214,6 +300,7 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let finishedLanes: [CockpitLaneSummary]
 }
 
 extension CockpitGatewayStatus {
@@ -418,7 +505,93 @@ extension CockpitWorkspaceSummary {
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
+        ],
+        finishedLanes: [
+            CockpitLaneSummary(
+                taskId: "task_auth",
+                taskTitle: "Fix auth token refresh",
+                workerId: "worker_auth",
+                workerName: "auth-fix",
+                lane: "worker",
+                status: "completed",
+                repoRoot: "/Users/tessaro/openclaw",
+                worktreePath: "/Users/tessaro/openclaw/.worktrees/code/auth-fix",
+                branch: "code/task_auth/auth-fix",
+                objective: "Fix expired token refresh in gateway connection.",
+                backendId: "claude-cli",
+                activeRunId: nil,
+                updatedAt: "2026-03-19T12:40:00.000Z",
+                latestRun: CockpitRunSummary(
+                    id: "run_auth",
+                    taskId: "task_auth",
+                    workerId: "worker_auth",
+                    status: "succeeded",
+                    summary: "Fixed auth token refresh and added regression test",
+                    backendId: "claude-cli",
+                    threadId: "thread_auth",
+                    startedAt: "2026-03-19T12:20:00.000Z",
+                    finishedAt: "2026-03-19T12:38:00.000Z",
+                    terminationReason: "succeeded",
+                    updatedAt: "2026-03-19T12:40:00.000Z"),
+                pendingReview: nil),
         ])
+}
+
+extension CockpitWorkerDetail {
+    static func preview(workerId: String) -> CockpitWorkerDetail {
+        let preview = CockpitWorkspaceSummary.preview
+        let lane = preview.finishedLanes.first(where: { $0.workerId == workerId })
+            ?? preview.activeLanes.first(where: { $0.workerId == workerId })
+        return CockpitWorkerDetail(
+            storePath: preview.storePath,
+            task: preview.recentTasks.first(where: { $0.id == lane?.taskId })
+                ?? CockpitTaskSummary(
+                    id: "task_preview",
+                    title: "Preview task",
+                    status: "done",
+                    priority: "normal",
+                    repoRoot: "/Users/tessaro/openclaw",
+                    updatedAt: "2026-03-19T12:40:00.000Z"),
+            worker: CockpitWorkerSummary(
+                id: workerId,
+                taskId: lane?.taskId ?? "task_preview",
+                name: lane?.workerName ?? "preview-worker",
+                status: lane?.status ?? "completed",
+                lane: lane?.lane ?? "worker",
+                repoRoot: lane?.repoRoot,
+                worktreePath: lane?.worktreePath,
+                branch: lane?.branch,
+                backendId: lane?.backendId,
+                activeRunId: nil,
+                updatedAt: lane?.updatedAt ?? "2026-03-19T12:40:00.000Z"),
+            runs: [
+                CockpitRunSummary(
+                    id: "run_auth",
+                    taskId: lane?.taskId ?? "task_preview",
+                    workerId: workerId,
+                    status: "succeeded",
+                    summary: "Fixed auth token refresh and added regression test",
+                    backendId: "claude-cli",
+                    threadId: "thread_auth",
+                    startedAt: "2026-03-19T12:20:00.000Z",
+                    finishedAt: "2026-03-19T12:38:00.000Z",
+                    terminationReason: "succeeded",
+                    updatedAt: "2026-03-19T12:40:00.000Z"),
+                CockpitRunSummary(
+                    id: "run_auth_1",
+                    taskId: lane?.taskId ?? "task_preview",
+                    workerId: workerId,
+                    status: "failed",
+                    summary: "Type error in token refresh handler",
+                    backendId: "claude-cli",
+                    threadId: "thread_auth_1",
+                    startedAt: "2026-03-19T12:05:00.000Z",
+                    finishedAt: "2026-03-19T12:18:00.000Z",
+                    terminationReason: "failed",
+                    updatedAt: "2026-03-19T12:18:00.000Z"),
+            ],
+            reviews: [])
+    }
 }
 
 extension CockpitWorkerLogs {
@@ -432,5 +605,162 @@ extension CockpitWorkerLogs {
             Worker state refreshed.
             """,
             stderrTail: "")
+    }
+}
+
+struct CockpitFileDiff: Identifiable {
+    let path: String
+    let hunks: String
+
+    var id: String { self.path }
+}
+
+enum CockpitReviewTab: String, CaseIterable, Identifiable {
+    case changes
+    case tests
+    case logs
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .changes: "Changes"
+        case .tests: "Tests"
+        case .logs: "Logs"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .changes: "doc.text.magnifyingglass"
+        case .tests: "checkmark.diamond"
+        case .logs: "terminal"
+        }
+    }
+}
+
+enum CockpitFinishedWorkTab: String, CaseIterable, Identifiable {
+    case overview
+    case changes
+    case tests
+    case logs
+    case runs
+
+    var id: String { self.rawValue }
+
+    var title: String {
+        switch self {
+        case .overview: "Overview"
+        case .changes: "Changes"
+        case .tests: "Tests"
+        case .logs: "Logs"
+        case .runs: "Runs"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .overview: "rectangle.3.group"
+        case .changes: "doc.text.magnifyingglass"
+        case .tests: "checkmark.diamond"
+        case .logs: "terminal"
+        case .runs: "clock.arrow.circlepath"
+        }
+    }
+}
+
+extension CockpitWorkerDiff {
+    /// Splits the unified diff into per-file segments.
+    var fileDiffs: [CockpitFileDiff] {
+        let lines = self.unifiedDiff.split(separator: "\n", omittingEmptySubsequences: false)
+        var results: [CockpitFileDiff] = []
+        var currentPath: String?
+        var currentLines: [Substring] = []
+
+        for line in lines {
+            if line.hasPrefix("diff --git ") {
+                if let path = currentPath {
+                    results.append(CockpitFileDiff(path: path, hunks: currentLines.joined(separator: "\n")))
+                }
+                // Extract b/path from "diff --git a/... b/..."
+                let parts = line.split(separator: " b/", maxSplits: 1)
+                currentPath = parts.count == 2 ? String(parts[1]) : String(line)
+                currentLines = [line]
+            } else {
+                currentLines.append(line)
+            }
+        }
+        if let path = currentPath {
+            results.append(CockpitFileDiff(path: path, hunks: currentLines.joined(separator: "\n")))
+        }
+        return results
+    }
+
+    var testSummaryLine: String? {
+        let lines = self.testOutput.split(separator: "\n", omittingEmptySubsequences: true)
+        // Look for "Tests  N passed" or similar summary lines
+        return lines.first(where: { $0.contains("passed") || $0.contains("failed") }).map(String.init)
+    }
+
+    var hasTestFailures: Bool {
+        self.testOutput.localizedCaseInsensitiveContains("FAIL") ||
+            self.testOutput.localizedCaseInsensitiveContains("failed")
+    }
+}
+
+extension CockpitWorkerDiff {
+    static func preview(workerId: String) -> CockpitWorkerDiff {
+        CockpitWorkerDiff(
+            workerId: workerId,
+            branch: "code/task_shell/shell-lane",
+            baseBranch: "main",
+            worktreePath: "/Users/tessaro/openclaw/.worktrees/code/shell-lane",
+            pullRequestUrl: "https://github.com/openclaw/openclaw/pull/42",
+            pullRequestState: "draft",
+            changedFiles: [
+                CockpitChangedFile(path: "apps/macos/Sources/OpenClaw/CockpitWindow.swift", status: "modified", additions: 120, deletions: 15),
+                CockpitChangedFile(path: "apps/macos/Sources/OpenClaw/CockpitData.swift", status: "modified", additions: 65, deletions: 2),
+                CockpitChangedFile(path: "src/code-cockpit/runtime.ts", status: "modified", additions: 85, deletions: 0),
+                CockpitChangedFile(path: "src/gateway/server-methods/code-cockpit.ts", status: "modified", additions: 8, deletions: 0),
+            ],
+            unifiedDiff: """
+            diff --git a/apps/macos/Sources/OpenClaw/CockpitWindow.swift b/apps/macos/Sources/OpenClaw/CockpitWindow.swift
+            --- a/apps/macos/Sources/OpenClaw/CockpitWindow.swift
+            +++ b/apps/macos/Sources/OpenClaw/CockpitWindow.swift
+            @@ -64,6 +64,10 @@ struct CockpitWindow: View {
+                         CockpitReviewSection(reviews: snapshot.pendingReviews)
+                         CockpitRunsSection(runs: snapshot.recentRuns)
+                     }
+            +        CockpitFinishedWorkSection(store: self.store)
+                     CockpitTasksSection(tasks: snapshot.recentTasks)
+                 }
+             }
+            """,
+            testOutput: """
+            Tests  42 passed | 1 failed (43)
+            Duration  12.4s
+
+            FAIL  src/code-cockpit/runtime.test.ts > readWorkerDiff > returns changed files
+            """,
+            commitLog: [
+                CockpitCommitEntry(
+                    sha: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+                    shortSha: "a1b2c3d",
+                    subject: "Cockpit: add commit log and test output panels",
+                    author: "Arc Self Drive",
+                    date: "2026-03-19T12:58:00+00:00"),
+                CockpitCommitEntry(
+                    sha: "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3",
+                    shortSha: "b2c3d4e",
+                    subject: "Cockpit: scaffold finished-work section layout",
+                    author: "Arc Self Drive",
+                    date: "2026-03-19T12:45:00+00:00"),
+                CockpitCommitEntry(
+                    sha: "c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+                    shortSha: "c3d4e5f",
+                    subject: "Cockpit: wire gateway RPC for worker diff",
+                    author: "Arc Self Drive",
+                    date: "2026-03-19T12:32:00+00:00"),
+            ])
     }
 }
