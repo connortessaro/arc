@@ -105,6 +105,7 @@ function makeSummary(): CodeCockpitWorkspaceSummary {
       },
     ],
     activeLanes: [],
+    terminalLanes: [],
   };
 }
 

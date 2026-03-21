@@ -130,6 +130,7 @@ const runtimeMethods = vi.hoisted(() => ({
       retryBackoffCount: 0,
       recentRuns: [],
       activeLanes: [],
+      terminalLanes: [],
     })),
   },
   getCodeCockpitRuntime: vi.fn(),
