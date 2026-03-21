@@ -143,6 +143,7 @@ export type CodeContextSnapshot = {
   kind: CodeContextSnapshotKind;
   title: string;
   body: string;
+  tags?: string[];
   createdAt: string;
 };
 
@@ -287,6 +288,31 @@ export type AppendCodeContextSnapshotInput = {
   kind?: CodeContextSnapshotKind;
   title: string;
   body: string;
+  tags?: string[];
+};
+
+export type SearchCodeContextSnapshotsInput = {
+  query?: string;
+  taskId?: string;
+  workerId?: string;
+  kind?: CodeContextSnapshotKind;
+  tags?: string[];
+  limit?: number;
+};
+
+export type SearchCodeContextSnapshotsResult = {
+  storePath: string;
+  snapshots: ScoredContextSnapshot[];
+};
+
+export type ScoredContextSnapshot = CodeContextSnapshot & {
+  score: number;
+};
+
+export type RetrieveCodeContextForTaskResult = {
+  storePath: string;
+  taskSnapshots: CodeContextSnapshot[];
+  relatedSnapshots: ScoredContextSnapshot[];
 };
 
 export type CreateCodeRunInput = {
@@ -427,6 +453,13 @@ function normalizeString(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeTags(tags: string[] | undefined): string[] {
+  if (!Array.isArray(tags)) {
+    return [];
+  }
+  return [...new Set(tags.map((tag) => tag.trim().toLowerCase()).filter(Boolean))];
+}
+
 function normalizePatchString(value: string | null | undefined): string | null | undefined {
   if (value === undefined) {
     return undefined;
@@ -498,6 +531,14 @@ function findReview(store: CodeCockpitStore, reviewId: string): CodeReviewReques
     throw new Error(`Review "${reviewId}" not found`);
   }
   return review;
+}
+
+function findSnapshot(store: CodeCockpitStore, snapshotId: string): CodeContextSnapshot {
+  const snapshot = store.contextSnapshots.find((entry) => entry.id === snapshotId);
+  if (!snapshot) {
+    throw new Error(`Memory "${snapshotId}" not found`);
+  }
+  return snapshot;
 }
 
 function findRun(store: CodeCockpitStore, runId: string): CodeRun {
@@ -1072,6 +1113,7 @@ export async function appendCodeContextSnapshot(
     if (input.workerId) {
       findWorker(store, input.workerId);
     }
+    const tags = normalizeTags(input.tags);
     const snapshot: CodeContextSnapshot = {
       id: createId("memory"),
       taskId: normalizeString(input.taskId),
@@ -1079,11 +1121,180 @@ export async function appendCodeContextSnapshot(
       kind,
       title: normalizeString(input.title) ?? "Snapshot",
       body: input.body.trim(),
+      ...(tags.length > 0 ? { tags } : {}),
       createdAt: updatedAt,
     };
     store.contextSnapshots.push(snapshot);
     return snapshot;
   });
+}
+
+export async function getCodeContextSnapshot(
+  snapshotId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeContextSnapshot> {
+  const store = await loadCodeCockpitStore(options);
+  return findSnapshot(store, snapshotId);
+}
+
+/**
+ * Score a snapshot against a text query using term-frequency overlap.
+ * Returns 0 when no query is provided (all snapshots match equally).
+ */
+function scoreSnapshot(snapshot: CodeContextSnapshot, queryTerms: string[]): number {
+  if (queryTerms.length === 0) {
+    return 0;
+  }
+
+  const haystack =
+    `${snapshot.title} ${snapshot.body} ${(snapshot.tags ?? []).join(" ")}`.toLowerCase();
+  let hits = 0;
+  for (const term of queryTerms) {
+    if (haystack.includes(term)) {
+      hits++;
+    }
+  }
+  return hits / queryTerms.length;
+}
+
+export async function searchCodeContextSnapshots(
+  input: SearchCodeContextSnapshotsInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<SearchCodeContextSnapshotsResult> {
+  const store = await loadCodeCockpitStore(options);
+  const limit = typeof input.limit === "number" && input.limit > 0 ? input.limit : 20;
+
+  const queryTerms = input.query
+    ? input.query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((term) => term.length > 0)
+    : [];
+
+  const inputTags = normalizeTags(input.tags);
+
+  const scored: ScoredContextSnapshot[] = store.contextSnapshots
+    .filter((snapshot) => (input.taskId ? snapshot.taskId === input.taskId : true))
+    .filter((snapshot) => (input.workerId ? snapshot.workerId === input.workerId : true))
+    .filter((snapshot) => (input.kind ? snapshot.kind === input.kind : true))
+    .filter((snapshot) => {
+      if (inputTags.length === 0) {
+        return true;
+      }
+      const snapshotTags = snapshot.tags ?? [];
+      return inputTags.every((tag) => snapshotTags.includes(tag));
+    })
+    .map((snapshot) => ({
+      ...snapshot,
+      score: scoreSnapshot(snapshot, queryTerms),
+    }))
+    .filter((entry) => (queryTerms.length > 0 ? entry.score > 0 : true));
+
+  // Sort by score descending, then by createdAt descending for ties.
+  scored.sort((left, right) => {
+    if (right.score !== left.score) {
+      return right.score - left.score;
+    }
+    return right.createdAt.localeCompare(left.createdAt);
+  });
+
+  return {
+    storePath: resolveCodeCockpitStorePath(options),
+    snapshots: scored.slice(0, limit),
+  };
+}
+
+/**
+ * Retrieve context relevant to a task: direct task snapshots first, then
+ * keyword-matched snapshots from the broader store ranked by relevance.
+ */
+export async function retrieveCodeContextForTask(
+  taskId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<RetrieveCodeContextForTaskResult> {
+  const store = await loadCodeCockpitStore(options);
+  const task = findTask(store, taskId);
+
+  // Direct snapshots bound to this task, newest first.
+  const taskSnapshots = [...store.contextSnapshots]
+    .filter((snapshot) => snapshot.taskId === taskId)
+    .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+
+  const taskSnapshotIds = new Set(taskSnapshots.map((snapshot) => snapshot.id));
+
+  // Build query terms from the task title, goal, and notes.
+  const stopWords = new Set([
+    "a",
+    "an",
+    "the",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "of",
+    "with",
+    "by",
+    "from",
+    "as",
+    "and",
+    "or",
+    "but",
+    "not",
+    "no",
+    "if",
+    "it",
+    "its",
+    "do",
+    "does",
+    "did",
+    "has",
+    "have",
+    "had",
+    "this",
+    "that",
+    "these",
+    "those",
+    "add",
+    "use",
+    "get",
+    "set",
+    "new",
+  ]);
+  const queryText = [task.title, task.goal, task.notes].filter(Boolean).join(" ");
+  const queryTerms = queryText
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((term) => term.length > 2 && !stopWords.has(term));
+
+  // Score unbound snapshots for relevance.
+  const relatedSnapshots: ScoredContextSnapshot[] = store.contextSnapshots
+    .filter((snapshot) => !taskSnapshotIds.has(snapshot.id))
+    .map((snapshot) => ({
+      ...snapshot,
+      score: scoreSnapshot(snapshot, queryTerms),
+    }))
+    .filter((entry) => entry.score > 0)
+    .toSorted((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return right.createdAt.localeCompare(left.createdAt);
+    })
+    .slice(0, 10);
+
+  return {
+    storePath: resolveCodeCockpitStorePath(options),
+    taskSnapshots,
+    relatedSnapshots,
+  };
 }
 
 export async function createCodeRun(

@@ -244,6 +244,63 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
         }),
     );
   },
+  "code.memory.add": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().addMemory({
+          taskId: optionalString(params.taskId),
+          workerId: optionalString(params.workerId),
+          kind: optionalString(params.kind) as never,
+          title: requireTitle(params.title),
+          body: requireMessage(params.body),
+          tags: Array.isArray(params.tags) ? params.tags : undefined,
+        }),
+    );
+  },
+  "code.memory.show": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().showMemory({
+          snapshotId: requireTitle(params.snapshotId, "snapshotId"),
+        }),
+    );
+  },
+  "code.memory.list": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().listMemory({
+          taskId: optionalString(params.taskId),
+          workerId: optionalString(params.workerId),
+          kind: optionalString(params.kind),
+        }),
+    );
+  },
+  "code.memory.search": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().searchMemory({
+          query: optionalString(params.query),
+          taskId: optionalString(params.taskId),
+          workerId: optionalString(params.workerId),
+          kind: optionalString(params.kind) as never,
+          tags: Array.isArray(params.tags) ? params.tags : undefined,
+          limit: typeof params.limit === "number" ? params.limit : undefined,
+        }),
+    );
+  },
+  "code.memory.retrieve": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().retrieveMemoryForTask({
+          taskId: requireTaskId(params.taskId),
+        }),
+    );
+  },
   "code.supervisor.tick": async ({ params, respond }) => {
     await withRuntimeResult(
       respond,

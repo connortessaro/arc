@@ -16,17 +16,26 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { ProcessSupervisor, RunExit, SpawnInput } from "../process/supervisor/index.js";
 import {
+  type AppendCodeContextSnapshotInput,
   type CreateCodeReviewRequestInput,
   type CreateCodeTaskInput,
+  type SearchCodeContextSnapshotsInput,
+  type SearchCodeContextSnapshotsResult,
+  type RetrieveCodeContextForTaskResult,
+  appendCodeContextSnapshot,
   createCodeTask,
   createCodeReviewRequest,
   createCodeRun,
   createCodeWorkerSession,
   getCodeTask,
+  getCodeContextSnapshot,
   getCodeCockpitWorkspaceSummary,
   getCodeRun,
   getCodeWorkerSession,
   loadCodeCockpitStore,
+  searchCodeContextSnapshots,
+  retrieveCodeContextForTask,
+  type CodeContextSnapshot,
   type CodeWorkerAuthHealth,
   type CodeWorkerEngineId,
   type CodePullRequestState,
@@ -160,6 +169,11 @@ export type ShowCodeTaskResult = {
 export type ListCodeReviewsResult = {
   storePath: string;
   reviews: CodeReviewRequest[];
+};
+
+export type ListCodeMemoryResult = {
+  storePath: string;
+  snapshots: CodeContextSnapshot[];
 };
 
 export type CodeSupervisorTickInput = {
@@ -1666,6 +1680,50 @@ class CodeCockpitRuntime {
   }): Promise<CodeResolvedReviewResult> {
     await this.ensureInitialized();
     return await resolveCodeReviewRequestStatus(params.reviewId, params.status);
+  }
+
+  async addMemory(params: AppendCodeContextSnapshotInput): Promise<CodeContextSnapshot> {
+    await this.ensureInitialized();
+    return await appendCodeContextSnapshot(params);
+  }
+
+  async showMemory(params: { snapshotId: string }): Promise<CodeContextSnapshot> {
+    await this.ensureInitialized();
+    return await getCodeContextSnapshot(params.snapshotId);
+  }
+
+  async listMemory(
+    params: {
+      taskId?: string;
+      workerId?: string;
+      kind?: string;
+    } = {},
+  ): Promise<ListCodeMemoryResult> {
+    await this.ensureInitialized();
+    const store = await loadCodeCockpitStore();
+    const snapshots = [...store.contextSnapshots]
+      .filter((snapshot) => (params.taskId ? snapshot.taskId === params.taskId : true))
+      .filter((snapshot) => (params.workerId ? snapshot.workerId === params.workerId : true))
+      .filter((snapshot) => (params.kind ? snapshot.kind === params.kind : true))
+      .toSorted((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return {
+      storePath: resolveCodeCockpitStorePath(),
+      snapshots,
+    };
+  }
+
+  async searchMemory(
+    params: SearchCodeContextSnapshotsInput,
+  ): Promise<SearchCodeContextSnapshotsResult> {
+    await this.ensureInitialized();
+    return await searchCodeContextSnapshots(params);
+  }
+
+  async retrieveMemoryForTask(params: {
+    taskId: string;
+  }): Promise<RetrieveCodeContextForTaskResult> {
+    await this.ensureInitialized();
+    return await retrieveCodeContextForTask(params.taskId);
   }
 
   async supervisorTick(params: CodeSupervisorTickInput = {}): Promise<CodeSupervisorTickResult> {
