@@ -415,4 +415,151 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("registers users and tracks presence with heartbeat and expiry", async () => {
+    const storeModule = await importStoreModule();
+
+    const alice = await storeModule.registerCockpitUser({ displayName: "Alice" });
+    expect(alice.id).toMatch(/^user_/);
+    expect(alice.displayName).toBe("Alice");
+
+    const bob = await storeModule.registerCockpitUser({ displayName: "Bob" });
+    expect(bob.id).toMatch(/^user_/);
+
+    const users = await storeModule.listCockpitUsers();
+    expect(users).toHaveLength(2);
+
+    // Alice heartbeats from her Mac app
+    const entry = await storeModule.updateCockpitPresence({
+      userId: alice.id,
+      clientId: "alice-mac-1",
+      surface: "app",
+    });
+    expect(entry.userId).toBe(alice.id);
+    expect(entry.surface).toBe("app");
+    expect(entry.displayName).toBe("Alice");
+
+    // Bob heartbeats from the TUI
+    await storeModule.updateCockpitPresence({
+      userId: bob.id,
+      clientId: "bob-tui-1",
+      surface: "tui",
+    });
+
+    const active = await storeModule.listCockpitPresence();
+    expect(active).toHaveLength(2);
+
+    // Presence entries older than 5 minutes are considered stale
+    const stalePresence = await storeModule.listCockpitPresence({
+      now: () => new Date(Date.now() + 6 * 60_000),
+    });
+    expect(stalePresence).toHaveLength(0);
+
+    // Disconnect removes the presence entry
+    await storeModule.removeCockpitPresence("alice-mac-1");
+    const afterDisconnect = await storeModule.listCockpitPresence();
+    expect(afterDisconnect).toHaveLength(1);
+    expect(afterDisconnect[0].clientId).toBe("bob-tui-1");
+  });
+
+  it("rejects presence heartbeat for unknown user", async () => {
+    const storeModule = await importStoreModule();
+    await expect(
+      storeModule.updateCockpitPresence({
+        userId: "user_nonexistent",
+        clientId: "client-1",
+        surface: "app",
+      }),
+    ).rejects.toThrow('User "user_nonexistent" not found');
+  });
+
+  it("upserts presence entry by clientId on repeated heartbeats", async () => {
+    const storeModule = await importStoreModule();
+    const user = await storeModule.registerCockpitUser({ displayName: "Charlie" });
+
+    await storeModule.updateCockpitPresence({
+      userId: user.id,
+      clientId: "charlie-app-1",
+      surface: "app",
+    });
+    await storeModule.updateCockpitPresence({
+      userId: user.id,
+      clientId: "charlie-app-1",
+      surface: "tui",
+      displayName: "Charlie (TUI)",
+    });
+
+    const store = await storeModule.loadCodeCockpitStore();
+    expect(store.presence).toHaveLength(1);
+    expect(store.presence[0].surface).toBe("tui");
+    expect(store.presence[0].displayName).toBe("Charlie (TUI)");
+  });
+
+  it("tracks store revision and increments on each mutation", async () => {
+    const storeModule = await importStoreModule();
+
+    const rev0 = await storeModule.getStoreRevision();
+    expect(rev0).toBe(0);
+
+    await storeModule.createCodeTask({ title: "First task" });
+    const rev1 = await storeModule.getStoreRevision();
+    expect(rev1).toBe(1);
+
+    await storeModule.createCodeTask({ title: "Second task" });
+    const rev2 = await storeModule.getStoreRevision();
+    expect(rev2).toBe(2);
+  });
+
+  it("sets createdBy and updatedBy when actorId is provided", async () => {
+    const storeModule = await importStoreModule();
+    const user = await storeModule.registerCockpitUser({ displayName: "Reviewer" });
+
+    const task = await storeModule.createCodeTask(
+      { title: "Actor-tracked task" },
+      { actorId: user.id },
+    );
+    expect(task.createdBy).toBe(user.id);
+    expect(task.updatedBy).toBe(user.id);
+
+    const worker = await storeModule.createCodeWorkerSession(
+      { taskId: task.id, name: "bot" },
+      { actorId: user.id },
+    );
+    expect(worker.createdBy).toBe(user.id);
+    expect(worker.updatedBy).toBe(user.id);
+
+    const review = await storeModule.createCodeReviewRequest(
+      { taskId: task.id, workerId: worker.id, title: "Check this" },
+      { actorId: user.id },
+    );
+    expect(review.createdBy).toBe(user.id);
+
+    const decision = await storeModule.appendCodeDecisionLog(
+      { taskId: task.id, kind: "routing", summary: "Use Claude" },
+      { actorId: user.id },
+    );
+    expect(decision.createdBy).toBe(user.id);
+  });
+
+  it("omits createdBy/updatedBy when actorId is not provided", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({ title: "No actor" });
+    expect(task.createdBy).toBeUndefined();
+    expect(task.updatedBy).toBeUndefined();
+  });
+
+  it("includes revision and activeUsers in summary", async () => {
+    const storeModule = await importStoreModule();
+    const user = await storeModule.registerCockpitUser({ displayName: "Alice" });
+    await storeModule.updateCockpitPresence({
+      userId: user.id,
+      clientId: "alice-mac-1",
+      surface: "app",
+    });
+
+    const summary = await storeModule.getCodeCockpitSummary();
+    expect(summary.revision).toBeGreaterThanOrEqual(2);
+    expect(summary.activeUsers).toHaveLength(1);
+    expect(summary.activeUsers[0].displayName).toBe("Alice");
+  });
 });
