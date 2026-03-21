@@ -32,6 +32,10 @@ describe("arc self-drive shell command installer", () => {
     expect(installResult.status).toBe(0);
 
     const shimPath = path.join(tempHome, ".local", "bin", "openclaw");
+    const shimSource = await fs.readFile(shimPath, "utf8");
+    expect(shimSource).toContain(`exec node "${repoRoot}/openclaw.mjs" "$@"`);
+    expect(shimSource).toContain(`exec node --import tsx "${repoRoot}/src/index.ts" "$@"`);
+
     const helpResult = await new Promise<{
       code: number | null;
       signal: string | null;
