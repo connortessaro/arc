@@ -52,6 +52,8 @@ export const CODE_REVIEW_STATUSES = [
 
 export const CODE_CONTEXT_SNAPSHOT_KINDS = ["repo", "obsidian", "brief", "handoff"] as const;
 
+export const CODE_LAYOUT_LANE_TYPES = ["worker", "review", "terminal"] as const;
+
 export const CODE_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
 
 export type CodeTaskStatus = (typeof CODE_TASK_STATUSES)[number];
@@ -64,6 +66,7 @@ export type CodePullRequestState = (typeof CODE_PULL_REQUEST_STATES)[number];
 export type CodeReviewStatus = (typeof CODE_REVIEW_STATUSES)[number];
 export type CodeContextSnapshotKind = (typeof CODE_CONTEXT_SNAPSHOT_KINDS)[number];
 export type CodeRunStatus = (typeof CODE_RUN_STATUSES)[number];
+export type CodeLayoutLaneType = (typeof CODE_LAYOUT_LANE_TYPES)[number];
 
 export type CodeTask = {
   id: string;
@@ -170,6 +173,26 @@ export type CodeRun = {
   updatedAt: string;
 };
 
+export type CodeLayoutLane = {
+  id: string;
+  type: CodeLayoutLaneType;
+  label?: string;
+  order: number;
+  widthFraction?: number;
+  worktreeBinding?: string;
+  backendId?: string;
+};
+
+export type CodeProjectLayout = {
+  id: string;
+  projectRoot: string;
+  name: string;
+  lanes: CodeLayoutLane[];
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CodeCockpitStore = {
   version: number;
   updatedAt: string;
@@ -179,6 +202,7 @@ export type CodeCockpitStore = {
   decisions: CodeDecisionLog[];
   contextSnapshots: CodeContextSnapshot[];
   runs: CodeRun[];
+  projectLayouts?: CodeProjectLayout[];
 };
 
 export type CodeCockpitSummary = {
@@ -348,6 +372,13 @@ export type UpdateCodeTaskInput = {
   lastOperatorHint?: string | null;
 };
 
+export type SaveCodeProjectLayoutInput = {
+  projectRoot: string;
+  name: string;
+  lanes: CodeLayoutLane[];
+  isActive?: boolean;
+};
+
 export type UpdateCodeRunInput = {
   status?: CodeRunStatus;
   summary?: string | null;
@@ -415,6 +446,7 @@ function createEmptyStore(updatedAt: string): CodeCockpitStore {
     decisions: [],
     contextSnapshots: [],
     runs: [],
+    projectLayouts: [],
   };
 }
 
@@ -469,6 +501,7 @@ function normalizeStore(
     decisions: Array.isArray(candidate.decisions) ? candidate.decisions : [],
     contextSnapshots: Array.isArray(candidate.contextSnapshots) ? candidate.contextSnapshots : [],
     runs: Array.isArray(candidate.runs) ? candidate.runs : [],
+    projectLayouts: Array.isArray(candidate.projectLayouts) ? candidate.projectLayouts : [],
   };
 }
 
@@ -1212,6 +1245,130 @@ export async function updateCodeRun(
     }
     run.updatedAt = updatedAt;
     return run;
+  });
+}
+
+function assertLayoutLaneType(value: string): CodeLayoutLaneType {
+  if ((CODE_LAYOUT_LANE_TYPES as readonly string[]).includes(value)) {
+    return value as CodeLayoutLaneType;
+  }
+  throw new Error(
+    `Invalid layout lane type "${value}". Expected one of: ${CODE_LAYOUT_LANE_TYPES.join(", ")}`,
+  );
+}
+
+function normalizeLayoutLanes(lanes: CodeLayoutLane[]): CodeLayoutLane[] {
+  return lanes.map((lane, index) => ({
+    id: normalizeString(lane.id) ?? createId("lane"),
+    type: assertLayoutLaneType(lane.type),
+    label: normalizeString(lane.label),
+    order: typeof lane.order === "number" && Number.isFinite(lane.order) ? lane.order : index,
+    widthFraction:
+      typeof lane.widthFraction === "number" && lane.widthFraction > 0 && lane.widthFraction <= 1
+        ? lane.widthFraction
+        : undefined,
+    worktreeBinding: normalizeString(lane.worktreeBinding),
+    backendId: normalizeString(lane.backendId),
+  }));
+}
+
+export async function saveCodeProjectLayout(
+  input: SaveCodeProjectLayoutInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeProjectLayout> {
+  const projectRoot = normalizeString(input.projectRoot);
+  if (!projectRoot) {
+    throw new Error("Project root is required");
+  }
+  const name = normalizeString(input.name);
+  if (!name) {
+    throw new Error("Layout name is required");
+  }
+  if (!Array.isArray(input.lanes) || input.lanes.length === 0) {
+    throw new Error("At least one layout lane is required");
+  }
+  const lanes = normalizeLayoutLanes(input.lanes);
+  return await mutateStore(options, (store, updatedAt) => {
+    const layouts = store.projectLayouts ?? [];
+    store.projectLayouts = layouts;
+
+    // Upsert: match on projectRoot + name
+    const existing = layouts.find(
+      (layout) => layout.projectRoot === projectRoot && layout.name === name,
+    );
+    if (existing) {
+      existing.lanes = lanes;
+      existing.updatedAt = updatedAt;
+      if (input.isActive !== undefined) {
+        existing.isActive = input.isActive;
+      }
+      if (existing.isActive) {
+        for (const other of layouts) {
+          if (other !== existing && other.projectRoot === projectRoot) {
+            other.isActive = false;
+          }
+        }
+      }
+      return existing;
+    }
+
+    const isActive = input.isActive ?? true;
+    if (isActive) {
+      for (const other of layouts) {
+        if (other.projectRoot === projectRoot) {
+          other.isActive = false;
+        }
+      }
+    }
+
+    const layout: CodeProjectLayout = {
+      id: createId("layout"),
+      projectRoot,
+      name,
+      lanes,
+      isActive,
+      createdAt: updatedAt,
+      updatedAt,
+    };
+    layouts.push(layout);
+    return layout;
+  });
+}
+
+export async function listCodeProjectLayouts(
+  projectRoot: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeProjectLayout[]> {
+  const store = await loadCodeCockpitStore(options);
+  const normalized = normalizeString(projectRoot);
+  if (!normalized) {
+    return [];
+  }
+  return (store.projectLayouts ?? [])
+    .filter((layout) => layout.projectRoot === normalized)
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export async function getActiveCodeProjectLayout(
+  projectRoot: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeProjectLayout | null> {
+  const layouts = await listCodeProjectLayouts(projectRoot, options);
+  return layouts.find((layout) => layout.isActive) ?? layouts[0] ?? null;
+}
+
+export async function deleteCodeProjectLayout(
+  layoutId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<void> {
+  await mutateStore(options, (store) => {
+    const layouts = store.projectLayouts ?? [];
+    const index = layouts.findIndex((layout) => layout.id === layoutId);
+    if (index === -1) {
+      throw new Error(`Layout "${layoutId}" not found`);
+    }
+    layouts.splice(index, 1);
+    store.projectLayouts = layouts;
   });
 }
 

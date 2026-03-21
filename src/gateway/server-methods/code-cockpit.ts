@@ -253,4 +253,43 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
         }),
     );
   },
+  "code.layout.save": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () => {
+      const projectRoot = requireTitle(params.projectRoot, "projectRoot");
+      const name = requireTitle(params.name, "name");
+      const lanes = Array.isArray(params.lanes) ? params.lanes : [];
+      return await getCodeCockpitRuntime().saveLayout({
+        projectRoot,
+        name,
+        lanes,
+        isActive: typeof params.isActive === "boolean" ? params.isActive : undefined,
+      });
+    });
+  },
+  "code.layout.list": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().listLayouts({
+          projectRoot: requireTitle(params.projectRoot, "projectRoot"),
+        }),
+    );
+  },
+  "code.layout.active": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().getActiveLayout({
+          projectRoot: requireTitle(params.projectRoot, "projectRoot"),
+        }),
+    );
+  },
+  "code.layout.delete": async ({ params, respond }) => {
+    await withRuntimeResult(respond, async () => {
+      await getCodeCockpitRuntime().deleteLayout({
+        layoutId: requireTitle(params.layoutId, "layoutId"),
+      });
+      return { deleted: true };
+    });
+  },
 };

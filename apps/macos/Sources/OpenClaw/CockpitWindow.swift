@@ -22,10 +22,26 @@ struct CockpitWindow: View {
                     }
                 }
                 Spacer()
+                if let layout = self.store.activeLayout {
+                    Text(layout.name)
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            Capsule()
+                                .fill(Color.accentColor.opacity(0.12)))
+                }
                 if self.store.isLoading {
                     ProgressView()
                         .controlSize(.small)
                 }
+                Button {
+                    Task { await self.store.saveCurrentLayout() }
+                } label: {
+                    Label("Save Layout", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.store.isSavingLayout || self.store.snapshot?.activeLanes.isEmpty ?? true)
                 Button {
                     Task { await self.store.startNextWorker() }
                 } label: {
@@ -98,12 +114,13 @@ struct CockpitWindow: View {
         .frame(minWidth: 1180, minHeight: 760)
         .task {
             await self.store.refreshIfNeeded()
+            await self.store.restoreLayout()
         }
     }
 }
 
 @MainActor
-final class CockpitWindowController: NSWindowController {
+final class CockpitWindowController: NSWindowController, NSWindowDelegate {
     let store: CockpitStore
 
     init(store: CockpitStore) {
@@ -120,11 +137,16 @@ final class CockpitWindowController: NSWindowController {
         window.setFrameAutosaveName("OpenClawCockpitWindow")
         super.init(window: window)
         self.shouldCascadeWindows = true
+        window.delegate = self
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        Task { await self.store.saveCurrentLayout() }
     }
 }
 

@@ -104,6 +104,10 @@ actor GatewayConnection {
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
         case codeWorkerLogs = "code.worker.logs"
+        case codeLayoutSave = "code.layout.save"
+        case codeLayoutList = "code.layout.list"
+        case codeLayoutActive = "code.layout.active"
+        case codeLayoutDelete = "code.layout.delete"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -846,6 +850,46 @@ extension GatewayConnection {
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
             timeoutMs: 10000)
+    }
+
+    func codeLayoutSave(
+        projectRoot: String,
+        name: String,
+        lanes: [[String: AnyCodable]],
+        isActive: Bool? = nil
+    ) async throws -> CockpitProjectLayout {
+        var params: [String: AnyCodable] = [
+            "projectRoot": AnyCodable(projectRoot),
+            "name": AnyCodable(name),
+            "lanes": AnyCodable(lanes),
+        ]
+        if let isActive {
+            params["isActive"] = AnyCodable(isActive)
+        }
+        return try await self.requestDecoded(
+            method: .codeLayoutSave,
+            params: params,
+            timeoutMs: 10000)
+    }
+
+    func codeLayoutList(projectRoot: String) async throws -> [CockpitProjectLayout] {
+        try await self.requestDecoded(
+            method: .codeLayoutList,
+            params: ["projectRoot": AnyCodable(projectRoot)],
+            timeoutMs: 10000)
+    }
+
+    func codeLayoutActive(projectRoot: String) async throws -> CockpitProjectLayout? {
+        try await self.requestDecoded(
+            method: .codeLayoutActive,
+            params: ["projectRoot": AnyCodable(projectRoot)],
+            timeoutMs: 10000)
+    }
+
+    func codeLayoutDelete(layoutId: String) async throws {
+        try await self.requestVoid(
+            method: .codeLayoutDelete,
+            params: ["layoutId": AnyCodable(layoutId)])
     }
 
     nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
