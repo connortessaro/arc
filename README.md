@@ -40,21 +40,21 @@ openclaw onboard
 
 Arc has one runtime with two surfaces:
 
-| Surface | Role |
-| --- | --- |
+| Surface             | Role                                                   |
+| ------------------- | ------------------------------------------------------ |
 | **Swift macOS app** | Flagship review workstation — diffs, queues, decisions |
-| **VPS TUI** | Fast remote operator console — queue, inspect, unblock |
+| **VPS TUI**         | Fast remote operator console — queue, inspect, unblock |
 
 ### The Layer Model
 
 Arc only makes sense if the layers stay clean:
 
-| Layer | Role |
-| --- | --- |
-| **Arc** | product, workflow, workstation, project cockpit |
-| **OpenClaw** | runtime, gateway, worktrees, worker lifecycle, durable state |
-| **Claude + Codex** | worker engines that do the coding work |
-| **Obsidian** | planning, notes, specs, architecture, project memory |
+| Layer              | Role                                                         |
+| ------------------ | ------------------------------------------------------------ |
+| **Arc**            | product, workflow, workstation, project cockpit              |
+| **OpenClaw**       | runtime, gateway, worktrees, worker lifecycle, durable state |
+| **Claude + Codex** | worker engines that do the coding work                       |
+| **Obsidian**       | planning, notes, specs, architecture, project memory         |
 
 Obsidian should hold thinking. Arc should hold execution.
 

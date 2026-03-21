@@ -18,15 +18,21 @@ import type { ProcessSupervisor, RunExit, SpawnInput } from "../process/supervis
 import {
   type CreateCodeReviewRequestInput,
   type CreateCodeTaskInput,
+  type SaveCodeProjectLayoutInput,
+  type CodeProjectLayout,
   createCodeTask,
   createCodeReviewRequest,
   createCodeRun,
   createCodeWorkerSession,
+  deleteCodeProjectLayout,
+  getActiveCodeProjectLayout,
   getCodeTask,
   getCodeCockpitWorkspaceSummary,
   getCodeRun,
   getCodeWorkerSession,
+  listCodeProjectLayouts,
   loadCodeCockpitStore,
+  saveCodeProjectLayout,
   type CodeWorkerAuthHealth,
   type CodeWorkerEngineId,
   type CodePullRequestState,
@@ -1738,6 +1744,26 @@ class CodeCockpitRuntime {
     const refreshedTask =
       refreshedStore.tasks.find((entry) => entry.id === candidate.task.id) ?? candidate.task;
     return { action: "started", task: refreshedTask, worker: started.worker, run: started.run };
+  }
+
+  async saveLayout(params: SaveCodeProjectLayoutInput): Promise<CodeProjectLayout> {
+    await this.ensureInitialized();
+    return await saveCodeProjectLayout(params);
+  }
+
+  async listLayouts(params: { projectRoot: string }): Promise<CodeProjectLayout[]> {
+    await this.ensureInitialized();
+    return await listCodeProjectLayouts(params.projectRoot);
+  }
+
+  async getActiveLayout(params: { projectRoot: string }): Promise<CodeProjectLayout | null> {
+    await this.ensureInitialized();
+    return await getActiveCodeProjectLayout(params.projectRoot);
+  }
+
+  async deleteLayout(params: { layoutId: string }): Promise<void> {
+    await this.ensureInitialized();
+    return await deleteCodeProjectLayout(params.layoutId);
   }
 
   async getWorkspaceSummary(): Promise<CodeCockpitWorkspaceSummary> {
