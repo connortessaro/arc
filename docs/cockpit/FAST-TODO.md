@@ -41,7 +41,7 @@ Arc becomes the default daily surface when these are all done:
 
 ## Not Now
 
-- [ ] broad product polish for strangers
+- [x] broad product polish for strangers
 - [ ] hosted-first architecture
 - [ ] generalized platform abstractions
 - [ ] multi-user shared cockpit state

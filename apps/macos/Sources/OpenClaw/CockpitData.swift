@@ -79,17 +79,17 @@ struct CockpitGatewayStatus: Codable, Sendable, Equatable {
             }
             return "Workers are running off this Mac through the remote gateway."
         case (.remote, .connecting):
-            return "Cockpit is waiting for the remote gateway or tunnel so worker execution can stay off-machine."
+            return "Waiting for the remote gateway or tunnel so worker execution can stay off-machine."
         case (.remote, .unavailable):
             return "Reconnect the remote gateway to keep worker execution off your Mac."
         case (.local, .ready):
             return "Workers are running on this Mac. Switch to Remote mode to offload the runtime and reduce RAM usage."
         case (.local, .connecting):
-            return "Cockpit is waiting for the local gateway."
+            return "Waiting for the local gateway to start."
         case (.local, .unavailable):
             return "Start or reconnect the local gateway before running workers."
         case (.unconfigured, _):
-            return "Configure a local or remote gateway before using Cockpit."
+            return "Configure a local or remote gateway to start using Arc."
         }
     }
 }
