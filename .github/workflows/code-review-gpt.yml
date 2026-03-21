@@ -1,0 +1,34 @@
+name: Code Review (GPT)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: GPT Code Review
+        uses: anc95/ChatGPT-CodeReview@74683225bf06d9a3c56f7733a5a71e2929ba2f2c
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LANGUAGE: English
+          OPENAI_API_ENDPOINT: https://api.openai.com/v1
+          MODEL: gpt-4o
+          PROMPT: |
+            You are an expert software engineer reviewing a pull request.
+            Focus on correctness, security, performance, and code quality.
+            Be concise and constructive. Highlight any bugs, potential issues,
+            or improvements. Skip trivial style comments already handled by linting.
+          top_p: 1
+          temperature: 0.2
+          max_tokens: 2000
+          MAX_PATCH_LENGTH: 10000
