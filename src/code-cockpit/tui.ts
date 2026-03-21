@@ -21,6 +21,7 @@ import { stopTuiSafely } from "../tui/tui.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type {
+  CodeCockpitLaneSummary,
   CodeCockpitWorkspaceSummary,
   CodeReviewRequest,
   CodeTask,
@@ -112,6 +113,36 @@ function clampLinesToWidth(lines: string[], width: number): string[] {
 
 function shortStatusLabel(status: CodeTaskStatus): string {
   return status.replaceAll("_", " ");
+}
+
+function lanesForTask(
+  summary: CodeCockpitWorkspaceSummary,
+  taskId: string,
+): CodeCockpitLaneSummary[] {
+  return [...summary.activeLanes, ...summary.completedLanes].filter(
+    (lane) => lane.taskId === taskId,
+  );
+}
+
+function shortCommitHash(hash: string | undefined): string | undefined {
+  return hash ? hash.slice(0, 7) : undefined;
+}
+
+function formatBranchChip(lane: CodeCockpitLaneSummary): string | undefined {
+  const branch = lane.pushedBranch ?? lane.branch;
+  if (!branch) {
+    return undefined;
+  }
+  const parts = [branch];
+  const commit = shortCommitHash(lane.lastCommitHash);
+  if (commit) {
+    parts.push(commit);
+  }
+  if (lane.pullRequestUrl) {
+    const prLabel = lane.pullRequestState === "draft" ? "draft PR" : "PR";
+    parts.push(`${prLabel} #${lane.pullRequestNumber ?? "?"}`);
+  }
+  return parts.join(" · ");
 }
 
 function taskGoal(task: CodeTask): string | undefined {
@@ -318,6 +349,13 @@ class ArcDashboardView implements Component {
       if (secondary) {
         lines.push(...renderWrappedBullet(theme.dim(secondary), width));
       }
+      const lanes = lanesForTask(this.snapshot!.summary, task.id);
+      for (const lane of lanes) {
+        const chip = formatBranchChip(lane);
+        if (chip) {
+          lines.push(...renderWrappedBullet(operatorColors.data(chip), width));
+        }
+      }
     }
     return lines;
   }
@@ -340,14 +378,12 @@ class ArcDashboardView implements Component {
       if (item.kind === "review") {
         const label = `${prefix} [review] ${item.review.title}`;
         lines.push(truncateToWidth(selected ? theme.bold(label) : label, width));
-        lines.push(
-          ...renderWrappedBullet(
-            theme.dim(
-              `task ${item.review.taskId} · ${item.review.summary ?? "waiting on human input"}`,
-            ),
-            width,
-          ),
-        );
+        const reviewLanes = lanesForTask(this.snapshot!.summary, item.review.taskId);
+        const reviewPrLane = reviewLanes.find((lane) => lane.pullRequestUrl);
+        const reviewMeta = reviewPrLane
+          ? `PR #${reviewPrLane.pullRequestNumber ?? "?"} · ${item.review.summary ?? "waiting on human input"}`
+          : `task ${item.review.taskId} · ${item.review.summary ?? "waiting on human input"}`;
+        lines.push(...renderWrappedBullet(theme.dim(reviewMeta), width));
         continue;
       }
       const label = `${prefix} [blocked] ${item.task.title}`;
@@ -401,6 +437,7 @@ class ArcDashboardView implements Component {
       lines.push(
         ...renderWrappedBullet(taskGoal(selectedTask) ?? "No goal or notes attached.", width),
       );
+      lines.push(...this.renderLaneGitDetail(selectedTask.id, width));
     } else if (selectedAttention?.kind === "review") {
       lines.push(
         truncateToWidth(
@@ -416,6 +453,7 @@ class ArcDashboardView implements Component {
           width,
         ),
       );
+      lines.push(...this.renderLaneGitDetail(selectedAttention.review.taskId, width));
     } else if (selectedAttention?.kind === "blocked") {
       lines.push(truncateToWidth(`${selectedAttention.task.title} · blocked`, width));
       lines.push(
@@ -424,8 +462,25 @@ class ArcDashboardView implements Component {
           width,
         ),
       );
+      lines.push(...this.renderLaneGitDetail(selectedAttention.task.id, width));
     } else {
       lines.push(theme.dim("Select a task or attention item."));
+    }
+
+    const completedLanes = this.snapshot!.summary.completedLanes.slice(0, 3);
+    if (completedLanes.length > 0) {
+      lines.push("", renderPanelTitle("COMPLETED WORK", width, "pulse"));
+      for (const lane of completedLanes) {
+        const chip = formatBranchChip(lane);
+        const laneLabel = `${lane.taskTitle} · ${lane.workerName}`;
+        lines.push(...renderWrappedBullet(laneLabel, width));
+        if (chip) {
+          lines.push(...renderWrappedBullet(operatorColors.data(chip), width));
+        }
+        if (lane.pullRequestUrl) {
+          lines.push(...renderWrappedBullet(operatorColors.data(lane.pullRequestUrl), width));
+        }
+      }
     }
 
     lines.push("", renderPanelTitle("RECENT RUNS", width, "data"));
@@ -434,10 +489,10 @@ class ArcDashboardView implements Component {
       lines.push(theme.dim("  No runs recorded yet."));
     } else {
       for (const run of recentRuns) {
-        const summary = run.summary?.trim() || run.terminationReason || run.status;
+        const runSummary = run.summary?.trim() || run.terminationReason || run.status;
         lines.push(
           ...renderWrappedBullet(
-            `${run.status} · ${run.workerId ?? "unknown worker"} · ${summary}`,
+            `${run.status} · ${run.workerId ?? "unknown worker"} · ${runSummary}`,
             width,
           ),
         );
@@ -450,6 +505,38 @@ class ArcDashboardView implements Component {
       ),
     );
     return lines;
+  }
+
+  private renderLaneGitDetail(taskId: string, width: number): string[] {
+    const lanes = lanesForTask(this.snapshot!.summary, taskId);
+    if (lanes.length === 0) {
+      return [];
+    }
+    const detail: string[] = [];
+    for (const lane of lanes) {
+      const branch = lane.pushedBranch ?? lane.branch;
+      if (!branch) {
+        continue;
+      }
+      detail.push(...renderWrappedBullet(operatorColors.data(`branch ${branch}`), width));
+      if (lane.lastCommitHash) {
+        detail.push(
+          ...renderWrappedBullet(operatorColors.muted(`commit ${lane.lastCommitHash}`), width),
+        );
+      }
+      if (lane.pullRequestUrl) {
+        const stateLabel = lane.pullRequestState ?? "open";
+        detail.push(
+          ...renderWrappedBullet(
+            operatorColors.data(
+              `PR #${lane.pullRequestNumber ?? "?"} [${stateLabel}] ${lane.pullRequestUrl}`,
+            ),
+            width,
+          ),
+        );
+      }
+    }
+    return detail;
   }
 
   private togglePane() {

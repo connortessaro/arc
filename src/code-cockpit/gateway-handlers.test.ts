@@ -122,6 +122,7 @@ const runtimeMethods = vi.hoisted(() => ({
       pendingReviews: [],
       recentRuns: [],
       activeLanes: [],
+      completedLanes: [],
     })),
   },
   getCodeCockpitRuntime: vi.fn(),

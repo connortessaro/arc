@@ -97,6 +97,7 @@ function makeSummary(): CodeCockpitWorkspaceSummary {
       },
     ],
     activeLanes: [],
+    completedLanes: [],
   };
 }
 
@@ -124,6 +125,72 @@ describe("arc dashboard renderer", () => {
     expect(rendered).toContain("ATTENTION");
     expect(rendered).toContain("SYSTEM PULSE");
     expect(rendered).toContain("RECENT RUNS");
+  });
+
+  it("surfaces branch, commit, and draft PR metadata for active and completed lanes", () => {
+    const summary = makeSummary();
+    summary.activeLanes = [
+      {
+        taskId: "task_fa54172b",
+        taskTitle: "route completed and blocked work into clear queues",
+        workerId: "worker_4fcb41d8",
+        workerName: "self-drive-fa54172b-1",
+        lane: "worker",
+        status: "running",
+        branch: "code/task_fa54172b/self-drive-fa54172b-1",
+        pushedBranch: "code/task_fa54172b/self-drive-fa54172b-1",
+        lastCommitHash: "abc1234def5678901234567890abcdef12345678",
+        pullRequestNumber: 42,
+        pullRequestUrl: "https://github.com/openclaw/openclaw/pull/42",
+        pullRequestState: "draft",
+        updatedAt: "2026-03-20T01:04:30.000Z",
+        latestRun: null,
+        pendingReview: null,
+      },
+    ];
+    summary.completedLanes = [
+      {
+        taskId: "task_fa54172b",
+        taskTitle: "route completed and blocked work into clear queues",
+        workerId: "worker_completed",
+        workerName: "self-drive-fa54172b-2",
+        lane: "worker",
+        status: "completed",
+        branch: "code/task_fa54172b/self-drive-fa54172b-2",
+        pushedBranch: "code/task_fa54172b/self-drive-fa54172b-2",
+        lastCommitHash: "deadbeef0123456789abcdef0123456789abcdef",
+        pullRequestNumber: 43,
+        pullRequestUrl: "https://github.com/openclaw/openclaw/pull/43",
+        pullRequestState: "open",
+        updatedAt: "2026-03-20T01:05:00.000Z",
+        latestRun: null,
+        pendingReview: null,
+      },
+    ];
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary,
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [],
+      health: null,
+    });
+
+    const rendered = lines.join("\n");
+
+    // Active lane: branch chip in operations pane
+    expect(rendered).toContain("code/task_fa54172b/self-drive-fa54172b-1");
+    expect(rendered).toContain("abc1234");
+    expect(rendered).toContain("draft PR #42");
+
+    // Detail pane: full commit and PR URL
+    expect(rendered).toContain("abc1234def5678901234567890abcdef12345678");
+    expect(rendered).toContain("https://github.com/openclaw/openclaw/pull/42");
+
+    // Completed work section
+    expect(rendered).toContain("COMPLETED WORK");
+    expect(rendered).toContain("code/task_fa54172b/self-drive-fa54172b-2");
+    expect(rendered).toContain("https://github.com/openclaw/openclaw/pull/43");
   });
 
   it("keeps every rendered line within the terminal width for long recent-run summaries", () => {

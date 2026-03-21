@@ -203,6 +203,11 @@ export type CodeCockpitLaneSummary = {
   commandPath?: string;
   authHealth?: CodeWorkerAuthHealth;
   activeRunId?: string;
+  lastCommitHash?: string;
+  pushedBranch?: string;
+  pullRequestNumber?: number;
+  pullRequestUrl?: string;
+  pullRequestState?: CodePullRequestState;
   updatedAt: string;
   latestRun: CodeRun | null;
   pendingReview: CodeReviewRequest | null;
@@ -212,6 +217,7 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   generatedAt: string;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  completedLanes: CodeCockpitLaneSummary[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -1212,39 +1218,53 @@ export async function getCodeCockpitWorkspaceSummary(
     }
   }
 
-  const activeLanes = sortByUpdatedAt(store.workers)
+  const toLaneSummary = (worker: CodeWorkerSession): CodeCockpitLaneSummary | null => {
+    const task = taskById.get(worker.taskId);
+    if (!task) {
+      return null;
+    }
+    return {
+      taskId: task.id,
+      taskTitle: task.title,
+      workerId: worker.id,
+      workerName: worker.name,
+      lane: worker.lane,
+      status: worker.status,
+      repoRoot: worker.repoRoot ?? task.repoRoot,
+      worktreePath: worker.worktreePath,
+      branch: worker.branch,
+      objective: worker.objective,
+      backendId: worker.backendId,
+      activeRunId: worker.activeRunId,
+      lastCommitHash: worker.lastCommitHash,
+      pushedBranch: worker.pushedBranch,
+      pullRequestNumber: worker.pullRequestNumber,
+      pullRequestUrl: worker.pullRequestUrl,
+      pullRequestState: worker.pullRequestState,
+      updatedAt: worker.updatedAt,
+      latestRun: latestRunByWorker.get(worker.id) ?? null,
+      pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
+    };
+  };
+
+  const sorted = sortByUpdatedAt(store.workers);
+  const activeLanes = sorted
     .filter((worker) => worker.status !== "completed")
     .slice(0, 6)
-    .flatMap((worker): CodeCockpitLaneSummary[] => {
-      const task = taskById.get(worker.taskId);
-      if (!task) {
-        return [];
-      }
-      return [
-        {
-          taskId: task.id,
-          taskTitle: task.title,
-          workerId: worker.id,
-          workerName: worker.name,
-          lane: worker.lane,
-          status: worker.status,
-          repoRoot: worker.repoRoot ?? task.repoRoot,
-          worktreePath: worker.worktreePath,
-          branch: worker.branch,
-          objective: worker.objective,
-          backendId: worker.backendId,
-          activeRunId: worker.activeRunId,
-          updatedAt: worker.updatedAt,
-          latestRun: latestRunByWorker.get(worker.id) ?? null,
-          pendingReview: pendingReviewByWorker.get(worker.id) ?? null,
-        },
-      ];
-    });
+    .map(toLaneSummary)
+    .filter((lane): lane is CodeCockpitLaneSummary => lane !== null);
+
+  const completedLanes = sorted
+    .filter((worker) => worker.status === "completed")
+    .slice(0, 6)
+    .map(toLaneSummary)
+    .filter((lane): lane is CodeCockpitLaneSummary => lane !== null);
 
   return {
     ...baseSummary,
     generatedAt: nowIso(options),
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    completedLanes,
   };
 }
