@@ -18,15 +18,23 @@ import type { ProcessSupervisor, RunExit, SpawnInput } from "../process/supervis
 import {
   type CreateCodeReviewRequestInput,
   type CreateCodeTaskInput,
+  type CreateCodeTerminalLaneInput,
+  type UpdateCodeTerminalLaneInput,
   createCodeTask,
   createCodeReviewRequest,
   createCodeRun,
+  createCodeTerminalLane,
   createCodeWorkerSession,
   getCodeTask,
   getCodeCockpitWorkspaceSummary,
   getCodeRun,
+  getCodeTerminalLane,
   getCodeWorkerSession,
+  listCodeTerminalLanes,
   loadCodeCockpitStore,
+  removeCodeTerminalLane,
+  updateCodeTerminalLane,
+  type CodeTerminalLane,
   type CodeWorkerAuthHealth,
   type CodeWorkerEngineId,
   type CodePullRequestState,
@@ -1743,6 +1751,35 @@ class CodeCockpitRuntime {
   async getWorkspaceSummary(): Promise<CodeCockpitWorkspaceSummary> {
     await this.ensureInitialized();
     return await getCodeCockpitWorkspaceSummary();
+  }
+
+  async addTerminalLane(input: CreateCodeTerminalLaneInput): Promise<CodeTerminalLane> {
+    await this.ensureInitialized();
+    return await createCodeTerminalLane(input);
+  }
+
+  async updateTerminalLane(params: {
+    laneId: string;
+    patch: UpdateCodeTerminalLaneInput;
+  }): Promise<CodeTerminalLane> {
+    await this.ensureInitialized();
+    return await updateCodeTerminalLane(params.laneId, params.patch);
+  }
+
+  async listTerminalLanes(): Promise<{ terminalLanes: CodeTerminalLane[] }> {
+    await this.ensureInitialized();
+    return { terminalLanes: await listCodeTerminalLanes() };
+  }
+
+  async showTerminalLane(params: { laneId: string }): Promise<CodeTerminalLane> {
+    await this.ensureInitialized();
+    return await getCodeTerminalLane(params.laneId);
+  }
+
+  async removeTerminalLane(params: { laneId: string }): Promise<{ removed: true }> {
+    await this.ensureInitialized();
+    await removeCodeTerminalLane(params.laneId);
+    return { removed: true };
   }
 }
 

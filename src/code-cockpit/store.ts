@@ -50,6 +50,8 @@ export const CODE_REVIEW_STATUSES = [
   "dismissed",
 ] as const;
 
+export const CODE_TERMINAL_LANE_STATUSES = ["open", "closed"] as const;
+
 export const CODE_CONTEXT_SNAPSHOT_KINDS = ["repo", "obsidian", "brief", "handoff"] as const;
 
 export const CODE_RUN_STATUSES = ["queued", "running", "succeeded", "failed", "cancelled"] as const;
@@ -62,6 +64,7 @@ export type CodeWorkerEngineId = (typeof CODE_WORKER_ENGINE_IDS)[number];
 export type CodeWorkerAuthHealth = (typeof CODE_WORKER_AUTH_HEALTHS)[number];
 export type CodePullRequestState = (typeof CODE_PULL_REQUEST_STATES)[number];
 export type CodeReviewStatus = (typeof CODE_REVIEW_STATUSES)[number];
+export type CodeTerminalLaneStatus = (typeof CODE_TERMINAL_LANE_STATUSES)[number];
 export type CodeContextSnapshotKind = (typeof CODE_CONTEXT_SNAPSHOT_KINDS)[number];
 export type CodeRunStatus = (typeof CODE_RUN_STATUSES)[number];
 
@@ -170,6 +173,18 @@ export type CodeRun = {
   updatedAt: string;
 };
 
+export type CodeTerminalLane = {
+  id: string;
+  repoRoot: string;
+  worktreePath?: string;
+  backendProfile?: string;
+  workerId?: string;
+  status: CodeTerminalLaneStatus;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type CodeCockpitStore = {
   version: number;
   updatedAt: string;
@@ -179,6 +194,7 @@ export type CodeCockpitStore = {
   decisions: CodeDecisionLog[];
   contextSnapshots: CodeContextSnapshot[];
   runs: CodeRun[];
+  terminalLanes: CodeTerminalLane[];
 };
 
 export type CodeCockpitSummary = {
@@ -227,6 +243,7 @@ export type CodeCockpitWorkspaceSummary = CodeCockpitSummary & {
   retryBackoffCount: number;
   recentRuns: CodeRun[];
   activeLanes: CodeCockpitLaneSummary[];
+  terminalLanes: CodeTerminalLane[];
 };
 
 export type CodeResolvedReviewResult = {
@@ -367,6 +384,22 @@ export type UpdateCodeRunInput = {
   stderrLogPath?: string | null;
 };
 
+export type CreateCodeTerminalLaneInput = {
+  repoRoot: string;
+  worktreePath?: string;
+  backendProfile?: string;
+  workerId?: string;
+  title?: string;
+};
+
+export type UpdateCodeTerminalLaneInput = {
+  worktreePath?: string | null;
+  backendProfile?: string | null;
+  workerId?: string | null;
+  title?: string | null;
+  status?: CodeTerminalLaneStatus;
+};
+
 const TASK_TRANSITIONS: Record<CodeTaskStatus, readonly CodeTaskStatus[]> = {
   queued: ["planning", "in_progress", "blocked", "cancelled"],
   planning: ["queued", "in_progress", "blocked", "cancelled"],
@@ -415,6 +448,7 @@ function createEmptyStore(updatedAt: string): CodeCockpitStore {
     decisions: [],
     contextSnapshots: [],
     runs: [],
+    terminalLanes: [],
   };
 }
 
@@ -469,6 +503,7 @@ function normalizeStore(
     decisions: Array.isArray(candidate.decisions) ? candidate.decisions : [],
     contextSnapshots: Array.isArray(candidate.contextSnapshots) ? candidate.contextSnapshots : [],
     runs: Array.isArray(candidate.runs) ? candidate.runs : [],
+    terminalLanes: Array.isArray(candidate.terminalLanes) ? candidate.terminalLanes : [],
   };
 }
 
@@ -596,6 +631,23 @@ function assertRunStatus(value: string): CodeRunStatus {
   throw new Error(
     `Invalid run status "${value}". Expected one of: ${CODE_RUN_STATUSES.join(", ")}`,
   );
+}
+
+function assertTerminalLaneStatus(value: string): CodeTerminalLaneStatus {
+  if ((CODE_TERMINAL_LANE_STATUSES as readonly string[]).includes(value)) {
+    return value as CodeTerminalLaneStatus;
+  }
+  throw new Error(
+    `Invalid terminal lane status "${value}". Expected one of: ${CODE_TERMINAL_LANE_STATUSES.join(", ")}`,
+  );
+}
+
+function findTerminalLane(store: CodeCockpitStore, laneId: string): CodeTerminalLane {
+  const lane = store.terminalLanes.find((entry) => entry.id === laneId);
+  if (!lane) {
+    throw new Error(`Terminal lane "${laneId}" not found`);
+  }
+  return lane;
 }
 
 function assertTransition<T extends string>(
@@ -1215,6 +1267,94 @@ export async function updateCodeRun(
   });
 }
 
+export async function createCodeTerminalLane(
+  input: CreateCodeTerminalLaneInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeTerminalLane> {
+  if (!normalizeString(input.repoRoot)) {
+    throw new Error("Terminal lane repoRoot is required");
+  }
+  return await mutateStore(options, (store, updatedAt) => {
+    if (input.workerId) {
+      findWorker(store, input.workerId);
+    }
+    const lane: CodeTerminalLane = {
+      id: createId("tl"),
+      repoRoot: normalizeString(input.repoRoot)!,
+      worktreePath: normalizeString(input.worktreePath),
+      backendProfile: normalizeString(input.backendProfile),
+      workerId: normalizeString(input.workerId),
+      status: "open",
+      title: normalizeString(input.title),
+      createdAt: updatedAt,
+      updatedAt,
+    };
+    store.terminalLanes.push(lane);
+    return lane;
+  });
+}
+
+export async function updateCodeTerminalLane(
+  laneId: string,
+  patch: UpdateCodeTerminalLaneInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeTerminalLane> {
+  return await mutateStore(options, (store, updatedAt) => {
+    const lane = findTerminalLane(store, laneId);
+    if (patch.status !== undefined) {
+      lane.status = assertTerminalLaneStatus(patch.status);
+    }
+    const worktreePath = normalizePatchString(patch.worktreePath);
+    if (worktreePath !== undefined) {
+      lane.worktreePath = worktreePath ?? undefined;
+    }
+    const backendProfile = normalizePatchString(patch.backendProfile);
+    if (backendProfile !== undefined) {
+      lane.backendProfile = backendProfile ?? undefined;
+    }
+    if (patch.workerId !== undefined) {
+      if (patch.workerId) {
+        findWorker(store, patch.workerId);
+      }
+      lane.workerId = patch.workerId ?? undefined;
+    }
+    const title = normalizePatchString(patch.title);
+    if (title !== undefined) {
+      lane.title = title ?? undefined;
+    }
+    lane.updatedAt = updatedAt;
+    return lane;
+  });
+}
+
+export async function listCodeTerminalLanes(
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeTerminalLane[]> {
+  const store = await loadCodeCockpitStore(options);
+  return sortByUpdatedAt(store.terminalLanes);
+}
+
+export async function getCodeTerminalLane(
+  laneId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeTerminalLane> {
+  const store = await loadCodeCockpitStore(options);
+  return findTerminalLane(store, laneId);
+}
+
+export async function removeCodeTerminalLane(
+  laneId: string,
+  options?: CodeCockpitStoreOptions,
+): Promise<void> {
+  await mutateStore(options, (store) => {
+    const index = store.terminalLanes.findIndex((entry) => entry.id === laneId);
+    if (index === -1) {
+      throw new Error(`Terminal lane "${laneId}" not found`);
+    }
+    store.terminalLanes.splice(index, 1);
+  });
+}
+
 export async function getCodeTask(
   taskId: string,
   options?: CodeCockpitStoreOptions,
@@ -1334,5 +1474,6 @@ export async function getCodeCockpitWorkspaceSummary(
     retryBackoffCount: store.tasks.filter((task) => isTaskInRetryBackoff(task, now)).length,
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
+    terminalLanes: sortByUpdatedAt(store.terminalLanes).filter((tl) => tl.status === "open"),
   };
 }
