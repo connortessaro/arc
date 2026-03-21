@@ -214,6 +214,7 @@ describe("plugin-sdk subpath exports", () => {
     expect(typeof telegramSdk.buildChannelConfigSchema).toBe("function");
     expect(typeof telegramSdk.TelegramConfigSchema).toBe("object");
     expect(typeof telegramSdk.projectCredentialSnapshotFields).toBe("function");
+    expect(typeof telegramSdk.listSkillCommandsForAgents).toBe("function");
     expect("resolveTelegramAccount" in asExports(telegramSdk)).toBe(false);
   });
 

@@ -108,6 +108,7 @@ export {
   getModelsPageSize,
   type ProviderInfo,
 } from "../../extensions/telegram/api.js";
+export { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 export {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
