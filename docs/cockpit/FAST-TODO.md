@@ -23,7 +23,7 @@ Arc becomes the default daily surface when these are all done:
 - [ ] Add blocked / needs-input queue
 - [ ] Add review-ready queue
 - [ ] Expose run summaries and review-ready artifacts from the gateway
-- [ ] Add diff/test/log review lane
+- [x] Add diff/test/log review lane
 - [ ] Add workspace persistence
 
 ## Phase B: Embedded Execution Surface
