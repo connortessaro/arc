@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 SYSTEMD_DIR="${HOME}/.config/systemd/user"
+GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
+GATEWAY_HEALTH_URL="http://127.0.0.1:${GATEWAY_PORT}/health"
+GATEWAY_WAIT_SECONDS="${ARC_TELEGRAM_GATEWAY_WAIT_SECONDS:-90}"
+OPENCLAW_GATEWAY_RETRY_ATTEMPTS="${ARC_TELEGRAM_OPENCLAW_RETRIES:-4}"
 
 # shellcheck source=./load-telegram-env.sh
 source "$ROOT_DIR/scripts/arc-self-drive/load-telegram-env.sh"
@@ -33,6 +37,50 @@ path.write_text(
 PY
 }
 
+wait_for_gateway_healthy() {
+  local deadline=$((SECONDS + GATEWAY_WAIT_SECONDS))
+  while true; do
+    if curl -fsS "$GATEWAY_HEALTH_URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    if (( SECONDS >= deadline )); then
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+run_openclaw_retry() {
+  local attempt=1
+  local stdout_file stderr_file status stderr_text
+  stdout_file="$(mktemp)"
+  stderr_file="$(mktemp)"
+  while true; do
+    if "$@" >"$stdout_file" 2>"$stderr_file"; then
+      cat "$stdout_file"
+      rm -f "$stdout_file" "$stderr_file"
+      return 0
+    fi
+
+    status=$?
+    stderr_text="$(cat "$stderr_file")"
+    if (( attempt >= OPENCLAW_GATEWAY_RETRY_ATTEMPTS )) || [[ "$stderr_text" != *"gateway closed"* && "$stderr_text" != *"gateway connect failed"* ]]; then
+      cat "$stderr_file" >&2
+      rm -f "$stdout_file" "$stderr_file"
+      return "$status"
+    fi
+
+    if ! wait_for_gateway_healthy; then
+      cat "$stderr_file" >&2
+      rm -f "$stdout_file" "$stderr_file"
+      return "$status"
+    fi
+
+    attempt=$((attempt + 1))
+    sleep 2
+  done
+}
+
 configure_openclaw_summary_job() {
   local enabled="${ARC_TELEGRAM_ENABLE_SUMMARY:-true}"
   if [[ "$enabled" != "true" ]]; then
@@ -61,10 +109,10 @@ EOF
   local summary_cron="${ARC_TELEGRAM_SUMMARY_CRON:-0 * * * *}"
   local summary_tz="${ARC_TELEGRAM_SUMMARY_TZ:-UTC}"
 
-  "$openclaw_command" channels add --channel telegram --token "${ARC_TELEGRAM_BOT_TOKEN}" >/dev/null
+  run_openclaw_retry "$openclaw_command" channels add --channel telegram --token "${ARC_TELEGRAM_BOT_TOKEN}" >/dev/null
 
   local cron_list_json job_id
-  cron_list_json="$("$openclaw_command" cron list --all --json)"
+  cron_list_json="$(run_openclaw_retry "$openclaw_command" cron list --all --json)"
   job_id="$(
     CRON_LIST_JSON="$cron_list_json" python3 - "$summary_job_name" <<'PY'
 import json
@@ -81,7 +129,7 @@ PY
   )"
 
   if [[ -n "$job_id" ]]; then
-    "$openclaw_command" cron edit "$job_id" \
+    run_openclaw_retry "$openclaw_command" cron edit "$job_id" \
       --cron "$summary_cron" \
       --tz "$summary_tz" \
       --message "$summary_prompt" \
@@ -92,7 +140,7 @@ PY
     return
   fi
 
-  "$openclaw_command" cron add \
+  run_openclaw_retry "$openclaw_command" cron add \
     --name "$summary_job_name" \
     --cron "$summary_cron" \
     --tz "$summary_tz" \

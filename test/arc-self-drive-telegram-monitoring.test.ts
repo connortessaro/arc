@@ -157,6 +157,15 @@ exit 1
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >>"${openclawLog}"
+if [[ "\${TEST_OPENCLAW_GATEWAY_RESTART_ONCE:-0}" == "1" ]]; then
+  marker="\${HOME}/.openclaw/.gateway-restart-once"
+  if [[ ! -f "$marker" && "\${1:-}" == "channels" && "\${2:-}" == "add" ]]; then
+    mkdir -p "$(dirname "$marker")"
+    : >"$marker"
+    printf '%s\\n' 'gateway connect failed: Error: gateway closed (1006): no close reason' >&2
+    exit 1
+  fi
+fi
 if [[ "\${1:-}" == "cron" && "\${2:-}" == "list" ]]; then
   printf '%s\\n' '{"jobs":[]}'
   exit 0
@@ -282,6 +291,46 @@ describe("arc self-drive telegram monitoring", () => {
     expect(systemctlCalls).toContain("--user daemon-reload");
     expect(systemctlCalls).toContain("--user enable arc-telegram-watchdog.timer");
     expect(systemctlCalls).toContain("--user restart arc-telegram-watchdog.timer");
+  });
+
+  it("retries summary setup when openclaw commands race a gateway restart", async () => {
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-retry-"));
+    tempDirs.push(tempHome);
+
+    const { binDir, openclawLog } = await installStubCommands(tempHome);
+    const envDir = path.join(tempHome, ".config", "arc-self-drive");
+    await fs.mkdir(envDir, { recursive: true });
+    await fs.writeFile(
+      path.join(envDir, "telegram-watchdog.env"),
+      [
+        "# Arc self-drive Telegram monitoring",
+        'ARC_TELEGRAM_BOT_TOKEN="123456:secret-token"',
+        'ARC_TELEGRAM_CHAT_ID="-1001234567890"',
+        'ARC_TELEGRAM_ENABLE_SUMMARY="true"',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync("bash", [installScript], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: tempHome,
+        PATH: `${binDir}:${process.env.PATH ?? ""}`,
+        ARC_SELF_DRIVE_OPENCLAW_COMMAND: path.join(binDir, "openclaw"),
+        TEST_OPENCLAW_GATEWAY_RESTART_ONCE: "1",
+      },
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+
+    const openclawCalls = await readLog(openclawLog);
+    expect((openclawCalls.match(/^channels add --channel telegram --token /gm) ?? []).length).toBe(
+      2,
+    );
+    expect(openclawCalls).toContain("cron add --name Arc runtime hourly summary");
   });
 
   it("alerts only on watchdog state transitions and sends a recovery message after health returns", async () => {
