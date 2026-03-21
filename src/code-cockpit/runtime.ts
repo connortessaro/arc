@@ -44,6 +44,10 @@ import {
   updateCodeTask,
   updateCodeTaskStatus,
   updateCodeWorkerSession,
+  type CodeCockpitWorkspaceState,
+  type SaveWorkspaceStateInput,
+  saveCodeCockpitWorkspaceState,
+  loadCodeCockpitWorkspaceState,
 } from "./store.js";
 import { isTaskInRetryBackoff, resolveTaskFailure } from "./task-reliability.js";
 
@@ -1743,6 +1747,16 @@ class CodeCockpitRuntime {
   async getWorkspaceSummary(): Promise<CodeCockpitWorkspaceSummary> {
     await this.ensureInitialized();
     return await getCodeCockpitWorkspaceSummary();
+  }
+
+  async saveWorkspaceState(input: SaveWorkspaceStateInput): Promise<CodeCockpitWorkspaceState> {
+    await this.ensureInitialized();
+    return await saveCodeCockpitWorkspaceState(input);
+  }
+
+  async loadWorkspaceState(): Promise<CodeCockpitWorkspaceState | null> {
+    await this.ensureInitialized();
+    return await loadCodeCockpitWorkspaceState();
   }
 }
 
