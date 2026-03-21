@@ -90,6 +90,10 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/channel-reply-runtime": {
+      "types": "./dist/plugin-sdk/channel-reply-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-reply-runtime.js"
+    },
     "./plugin-sdk/reply-runtime": {
       "types": "./dist/plugin-sdk/reply-runtime.d.ts",
       "default": "./dist/plugin-sdk/reply-runtime.js"

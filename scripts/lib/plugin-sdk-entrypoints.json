@@ -12,6 +12,7 @@
   "setup",
   "setup-tools",
   "config-runtime",
+  "channel-reply-runtime",
   "reply-runtime",
   "channel-runtime",
   "interactive-runtime",
