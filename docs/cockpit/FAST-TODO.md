@@ -46,4 +46,4 @@ Arc becomes the default daily surface when these are all done:
 - [ ] generalized platform abstractions
 - [ ] multi-user shared cockpit state
 - [ ] advanced memory / retrieval work
-- [ ] full-editor ambitions before the review workstation is strong
+- [x] full-editor ambitions before the review workstation is strong
