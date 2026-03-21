@@ -104,6 +104,7 @@ actor GatewayConnection {
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
         case codeWorkerLogs = "code.worker.logs"
+        case codeWorkerReviewArtifacts = "code.worker.review-artifacts"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -846,6 +847,13 @@ extension GatewayConnection {
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
             timeoutMs: 10000)
+    }
+
+    func codeWorkerReviewArtifacts(workerId: String) async throws -> CockpitReviewArtifacts {
+        try await self.requestDecoded(
+            method: .codeWorkerReviewArtifacts,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 15000)
     }
 
     nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {

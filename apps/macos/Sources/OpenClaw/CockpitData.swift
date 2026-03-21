@@ -187,6 +187,16 @@ struct CockpitLaneSummary: Codable, Identifiable, Sendable {
     }
 }
 
+struct CockpitReviewArtifacts: Codable, Sendable {
+    let workerId: String
+    let worktreePath: String
+    let baseBranch: String
+    let diff: String
+    let commitLog: String
+    let testOutput: String
+    let generatedAt: String
+}
+
 struct CockpitWorkerLogs: Codable, Sendable {
     let workerId: String
     let latestRun: CockpitRunSummary?
@@ -419,6 +429,39 @@ extension CockpitWorkspaceSummary {
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
         ])
+}
+
+extension CockpitReviewArtifacts {
+    static func preview(workerId: String) -> CockpitReviewArtifacts {
+        CockpitReviewArtifacts(
+            workerId: workerId,
+            worktreePath: "/Users/tessaro/openclaw/.worktrees/code/shell-lane",
+            baseBranch: "main",
+            diff: """
+             src/code-cockpit/runtime.ts | 42 ++++++++++++++++++++++++++++++++++++++++++
+             src/code-cockpit/store.ts    |  9 +++++++++
+             2 files changed, 51 insertions(+)
+
+            diff --git a/src/code-cockpit/runtime.ts b/src/code-cockpit/runtime.ts
+            --- a/src/code-cockpit/runtime.ts
+            +++ b/src/code-cockpit/runtime.ts
+            @@ -1585,6 +1585,48 @@
+            +  async readWorkerReviewArtifacts(params: {
+            +    workerId: string;
+            +  }): Promise<CodeWorkerReviewArtifacts> {
+            +    // ... review artifacts collection
+            +  }
+            """,
+            commitLog: """
+            abc1234 feat: add review artifacts endpoint
+            def5678 feat: add diff/test/log review lane UI
+            """,
+            testOutput: """
+            Tests: 42 passed, 0 failed
+            Test Suites: 8 passed, 0 failed
+            """,
+            generatedAt: "2026-03-19T13:00:00.000Z")
+    }
 }
 
 extension CockpitWorkerLogs {

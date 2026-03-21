@@ -81,6 +81,15 @@ const runtimeMethods = vi.hoisted(() => ({
       stdoutTail: "",
       stderrTail: "",
     })),
+    readWorkerReviewArtifacts: vi.fn(async ({ workerId }: { workerId: string }) => ({
+      workerId,
+      worktreePath: "/tmp/worktree",
+      baseBranch: "main",
+      diff: "diff --git a/file.ts b/file.ts\n+added line",
+      commitLog: "abc1234 feat: add review lane",
+      testOutput: "Tests: 1 passed",
+      generatedAt: "2026-03-19T12:00:00.000Z",
+    })),
     supervisorTick: vi.fn(async ({ repoRoot }: { repoRoot?: string }) => ({
       action: "started",
       task: { id: "task_123", title: "Ship blocked queue", repoRoot },
@@ -155,6 +164,7 @@ beforeEach(() => {
   runtimeMethods.runtime.cancelWorker.mockClear();
   runtimeMethods.runtime.showWorker.mockClear();
   runtimeMethods.runtime.readWorkerLogs.mockClear();
+  runtimeMethods.runtime.readWorkerReviewArtifacts.mockClear();
   runtimeMethods.runtime.supervisorTick.mockClear();
   runtimeMethods.runtime.getWorkspaceSummary.mockClear();
 });
@@ -320,6 +330,40 @@ describe("code cockpit gateway handlers", () => {
       expect.objectContaining({
         action: "started",
         task: expect.objectContaining({ id: "task_123" }),
+      }),
+      undefined,
+    );
+  });
+
+  it("delegates worker.review-artifacts to the gateway-owned runtime", async () => {
+    const { codeCockpitHandlers } = await import("../gateway/server-methods/code-cockpit.js");
+    const respond = vi.fn();
+
+    await codeCockpitHandlers["code.worker.review-artifacts"]({
+      req: {
+        method: "code.worker.review-artifacts",
+        id: "1",
+        params: { workerId: "worker_123" },
+      },
+      params: { workerId: "worker_123" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(runtimeMethods.getCodeCockpitRuntime).toHaveBeenCalledTimes(1);
+    expect(runtimeMethods.runtime.readWorkerReviewArtifacts).toHaveBeenCalledWith({
+      workerId: "worker_123",
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        workerId: "worker_123",
+        baseBranch: "main",
+        diff: expect.stringContaining("diff --git"),
+        commitLog: expect.stringContaining("abc1234"),
+        testOutput: expect.stringContaining("passed"),
       }),
       undefined,
     );
