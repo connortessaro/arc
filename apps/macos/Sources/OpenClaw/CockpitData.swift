@@ -214,6 +214,9 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let completedLanes: [CockpitLaneSummary]
+    let blockedLanes: [CockpitLaneSummary]
+    let needsInputLanes: [CockpitLaneSummary]
 }
 
 extension CockpitGatewayStatus {
@@ -418,7 +421,10 @@ extension CockpitWorkspaceSummary {
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
-        ])
+        ],
+        completedLanes: [],
+        blockedLanes: [],
+        needsInputLanes: [])
 }
 
 extension CockpitWorkerLogs {

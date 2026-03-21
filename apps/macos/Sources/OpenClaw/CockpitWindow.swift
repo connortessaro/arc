@@ -73,6 +73,27 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        if !snapshot.needsInputLanes.isEmpty || !snapshot.blockedLanes.isEmpty {
+                            HStack(alignment: .top, spacing: 16) {
+                                CockpitQueueSection(
+                                    title: "Needs Input",
+                                    icon: "hand.raised.fill",
+                                    tint: .orange,
+                                    lanes: snapshot.needsInputLanes)
+                                CockpitQueueSection(
+                                    title: "Blocked",
+                                    icon: "exclamationmark.triangle.fill",
+                                    tint: .red,
+                                    lanes: snapshot.blockedLanes)
+                            }
+                        }
+                        if !snapshot.completedLanes.isEmpty {
+                            CockpitQueueSection(
+                                title: "Completed",
+                                icon: "checkmark.circle.fill",
+                                tint: .green,
+                                lanes: snapshot.completedLanes)
+                        }
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
@@ -240,9 +261,10 @@ private struct CockpitMetricStrip: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CockpitMetricCard(label: "Tasks", value: "\(self.snapshot.totals.tasks)")
-            CockpitMetricCard(label: "Workers", value: "\(self.snapshot.totals.workers)")
-            CockpitMetricCard(label: "Reviews", value: "\(self.snapshot.totals.reviews)")
+            CockpitMetricCard(label: "Active", value: "\(self.snapshot.activeLanes.count)")
+            CockpitMetricCard(label: "Needs Input", value: "\(self.snapshot.needsInputLanes.count)")
+            CockpitMetricCard(label: "Blocked", value: "\(self.snapshot.blockedLanes.count)")
+            CockpitMetricCard(label: "Completed", value: "\(self.snapshot.completedLanes.count)")
             CockpitMetricCard(label: "Runs", value: "\(self.snapshot.totals.runs)")
         }
     }
@@ -567,6 +589,55 @@ private struct CockpitTasksSection: View {
                         .fill(Color.primary.opacity(0.04)))
             }
         }
+    }
+}
+
+private struct CockpitQueueSection: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    let lanes: [CockpitLaneSummary]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(self.title, systemImage: self.icon)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(self.tint)
+            if self.lanes.isEmpty {
+                sectionPlaceholder("No \(self.title.lowercased()) work.")
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(self.lanes.prefix(6)) { lane in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text(lane.workerName)
+                                    .font(.headline)
+                                Spacer()
+                                Text(lane.status.replacingOccurrences(of: "_", with: " "))
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(lane.taskTitle)
+                                .font(.subheadline)
+                                .multilineTextAlignment(.leading)
+                            if let summary = lane.latestRun?.summary, !summary.isEmpty {
+                                Text(summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
+                        .padding(.bottom, 6)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(self.tint.opacity(0.06)))
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

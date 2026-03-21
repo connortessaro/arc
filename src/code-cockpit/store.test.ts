@@ -369,7 +369,7 @@ describe("code cockpit store", () => {
 
     const summary = await storeModule.getCodeCockpitWorkspaceSummary();
 
-    expect(summary.activeLanes).toEqual(
+    expect(summary.completedLanes).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           workerId: worker.id,
@@ -379,6 +379,65 @@ describe("code cockpit store", () => {
             status: "failed",
           }),
         }),
+      ]),
+    );
+  });
+
+  it("routes blocked tasks into blockedLanes", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Blocked by missing key",
+      repoRoot: "/tmp/openclaw",
+      status: "blocked",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "blocked-worker",
+      status: "running",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.blockedLanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          workerId: worker.id,
+          taskTitle: "Blocked by missing key",
+        }),
+      ]),
+    );
+  });
+
+  it("routes awaiting_review and paused workers into needsInputLanes", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Waiting on human review",
+      repoRoot: "/tmp/openclaw",
+      status: "in_progress",
+    });
+    const reviewWorker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "review-worker",
+      status: "awaiting_review",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+    const pausedWorker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "paused-worker",
+      status: "paused",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.needsInputLanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ workerId: reviewWorker.id, status: "awaiting_review" }),
+        expect.objectContaining({ workerId: pausedWorker.id, status: "paused" }),
       ]),
     );
   });

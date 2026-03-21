@@ -97,6 +97,9 @@ function makeSummary(): CodeCockpitWorkspaceSummary {
       },
     ],
     activeLanes: [],
+    completedLanes: [],
+    blockedLanes: [],
+    needsInputLanes: [],
   };
 }
 
@@ -124,6 +127,25 @@ describe("arc dashboard renderer", () => {
     expect(rendered).toContain("ATTENTION");
     expect(rendered).toContain("SYSTEM PULSE");
     expect(rendered).toContain("RECENT RUNS");
+  });
+
+  it("renders the COMPLETED pane with done/cancelled tasks", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [
+        makeTask({ id: "task_done", title: "Ship queue routing", status: "done" }),
+        makeTask({ id: "task_cancelled", title: "Abandoned spike", status: "cancelled" }),
+      ],
+      reviews: [],
+      health: null,
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("COMPLETED");
+    expect(rendered).toContain("Ship queue routing");
+    expect(rendered).toContain("Abandoned spike");
   });
 
   it("keeps every rendered line within the terminal width for long recent-run summaries", () => {
