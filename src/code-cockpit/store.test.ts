@@ -415,4 +415,131 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("exposes artifact fields on active lane summaries", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Add review queue",
+      repoRoot: "/tmp/openclaw",
+      status: "in_progress",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "review-queue",
+      status: "awaiting_review",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+      branch: "code/task/review-queue",
+    });
+    await storeModule.updateCodeWorkerSession(worker.id, {
+      lastCommitHash: "abc123def456",
+      pushedBranch: "code/task/review-queue",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.com/openclaw/openclaw/pull/42",
+      pullRequestState: "draft",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.activeLanes[0]).toMatchObject({
+      workerId: worker.id,
+      lastCommitHash: "abc123def456",
+      pushedBranch: "code/task/review-queue",
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.com/openclaw/openclaw/pull/42",
+      pullRequestState: "draft",
+    });
+  });
+
+  it("populates reviewReadyLanes for completed workers with artifacts", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Harden retry loop",
+      repoRoot: "/tmp/openclaw",
+      status: "done",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "retry-harden",
+      status: "completed",
+      lane: "worker",
+      repoRoot: "/tmp/openclaw",
+    });
+    await storeModule.updateCodeWorkerSession(worker.id, {
+      lastCommitHash: "deadbeef1234",
+      pullRequestUrl: "https://github.com/openclaw/openclaw/pull/99",
+      pullRequestNumber: 99,
+      pullRequestState: "open",
+    });
+    await storeModule.createCodeRun({
+      taskId: task.id,
+      workerId: worker.id,
+      status: "succeeded",
+      summary: "Hardened the retry loop with backoff.",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    // Completed workers are excluded from activeLanes
+    expect(summary.activeLanes.find((lane) => lane.workerId === worker.id)).toBeUndefined();
+    // But appear in reviewReadyLanes
+    expect(summary.reviewReadyLanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          workerId: worker.id,
+          taskTitle: "Harden retry loop",
+          pullRequestUrl: "https://github.com/openclaw/openclaw/pull/99",
+          pullRequestNumber: 99,
+          lastCommitHash: "deadbeef1234",
+          latestRun: expect.objectContaining({
+            summary: "Hardened the retry loop with backoff.",
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("excludes completed workers without artifacts from reviewReadyLanes", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "No-op task",
+      repoRoot: "/tmp/openclaw",
+      status: "done",
+    });
+    await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "no-artifact",
+      status: "completed",
+      lane: "worker",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    expect(summary.reviewReadyLanes).toHaveLength(0);
+  });
+
+  it("avoids duplicating awaiting_review workers in both activeLanes and reviewReadyLanes", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Dual-lane check",
+      repoRoot: "/tmp/openclaw",
+      status: "review",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "dual-lane",
+      status: "awaiting_review",
+      lane: "worker",
+    });
+    await storeModule.updateCodeWorkerSession(worker.id, {
+      lastCommitHash: "face0ff0",
+    });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+
+    // Worker is in activeLanes (not completed, so included)
+    expect(summary.activeLanes.find((lane) => lane.workerId === worker.id)).toBeDefined();
+    // And NOT duplicated in reviewReadyLanes
+    expect(summary.reviewReadyLanes.find((lane) => lane.workerId === worker.id)).toBeUndefined();
+  });
 });

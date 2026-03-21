@@ -73,6 +73,14 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        if let reviewReadyLanes = snapshot.reviewReadyLanes, !reviewReadyLanes.isEmpty {
+                            CockpitReviewReadySection(
+                                lanes: reviewReadyLanes,
+                                selectedWorkerId: self.store.selectedWorkerId,
+                                onSelect: { workerId in
+                                    Task { await self.store.selectWorker(workerId) }
+                                })
+                        }
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
@@ -313,6 +321,17 @@ private struct CockpitLaneSection: View {
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.leading)
                                 }
+                                if let prUrl = lane.pullRequestUrl, !prUrl.isEmpty {
+                                    let prLabel = lane.pullRequestNumber.map { "PR #\($0)" } ?? "PR"
+                                    let stateLabel = lane.pullRequestState ?? "open"
+                                    Text("\(prLabel) (\(stateLabel))")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.blue)
+                                } else if let commit = lane.lastCommitHash, !commit.isEmpty {
+                                    Text("commit \(String(commit.prefix(8)))")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
                                 if let review = lane.pendingReview {
                                     Text("Pending review: \(review.title)")
                                         .font(.caption)
@@ -329,6 +348,60 @@ private struct CockpitLaneSection: View {
                         .buttonStyle(.plain)
                     }
                 }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CockpitReviewReadySection: View {
+    let lanes: [CockpitLaneSummary]
+    let selectedWorkerId: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Review Ready")
+                .font(.title3.weight(.semibold))
+            ForEach(self.lanes) { lane in
+                Button {
+                    self.onSelect(lane.workerId)
+                } label: {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(lane.taskTitle)
+                                .font(.subheadline.weight(.medium))
+                            if let summary = lane.latestRun?.summary, !summary.isEmpty {
+                                Text(summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 4) {
+                            if let prUrl = lane.pullRequestUrl, !prUrl.isEmpty {
+                                let prLabel = lane.pullRequestNumber.map { "PR #\($0)" } ?? "PR"
+                                Text(prLabel)
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.blue)
+                            } else if let commit = lane.lastCommitHash, !commit.isEmpty {
+                                Text(String(commit.prefix(8)))
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text(lane.workerName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(self.selectedWorkerId == lane.workerId ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
+                }
+                .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
