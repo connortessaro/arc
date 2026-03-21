@@ -104,6 +104,8 @@ actor GatewayConnection {
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
         case codeWorkerLogs = "code.worker.logs"
+        case codeWorkspaceStateSave = "code.cockpit.workspace-state.save"
+        case codeWorkspaceStateLoad = "code.cockpit.workspace-state.load"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -846,6 +848,24 @@ extension GatewayConnection {
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
             timeoutMs: 10000)
+    }
+
+    func codeWorkspaceStateSave(selectedWorkerId: String?, lastProjectRoot: String?) async throws {
+        var params: [String: AnyCodable] = [:]
+        if let selectedWorkerId, !selectedWorkerId.isEmpty {
+            params["selectedWorkerId"] = AnyCodable(selectedWorkerId)
+        }
+        if let lastProjectRoot, !lastProjectRoot.isEmpty {
+            params["lastProjectRoot"] = AnyCodable(lastProjectRoot)
+        }
+        try await self.requestVoid(
+            method: .codeWorkspaceStateSave,
+            params: params.isEmpty ? nil : params,
+            timeoutMs: 5000)
+    }
+
+    func codeWorkspaceStateLoad() async throws -> CockpitWorkspaceState {
+        try await self.requestDecoded(method: .codeWorkspaceStateLoad, timeoutMs: 5000)
     }
 
     nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {
