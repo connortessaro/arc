@@ -134,8 +134,4 @@ final class CockpitTerminalStore {
         self.pollTask = nil
         self.isPolling = false
     }
-
-    deinit {
-        self.pollTask?.cancel()
-    }
 }
