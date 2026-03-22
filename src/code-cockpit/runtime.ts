@@ -48,7 +48,7 @@ import {
 import { isTaskInRetryBackoff, resolveTaskFailure } from "./task-reliability.js";
 
 const DEFAULT_CODEX_WORKER_MODEL = "gpt-5.4";
-const DEFAULT_CLAUDE_WORKER_MODEL = "claude-opus-4-6";
+const DEFAULT_CLAUDE_WORKER_MODEL = "claude-sonnet-4-6";
 const DEFAULT_WORKER_TIMEOUT_MS = 30 * 60_000;
 const MAX_LOG_TAIL_CHARS = 8_000;
 const ENGINE_FAILURE_COOLDOWN_MS = 6 * 60 * 60_000;
@@ -188,6 +188,13 @@ function nowIso(now: () => Date): string {
 function normalizeString(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function resolveDefaultModelForEngine(engine: WorkerEngineAdapter): string {
+  if (engine.engineId === "claude") {
+    return normalizeString(process.env.ARC_SELF_DRIVE_CLAUDE_MODEL) ?? DEFAULT_CLAUDE_WORKER_MODEL;
+  }
+  return engine.defaultModel;
 }
 
 function slugifyWorkerName(name: string): string {
@@ -1300,7 +1307,7 @@ class CodeCockpitRuntime {
     if (!prompt) {
       throw new Error(`Worker "${worker.id}" has no objective or task goal to execute`);
     }
-    const modelId = normalizeString(worker.engineModel) ?? engine.defaultModel;
+    const modelId = normalizeString(worker.engineModel) ?? resolveDefaultModelForEngine(engine);
     const useResume = Boolean(worker.threadId && preparedBackend.backend.resumeArgs?.length);
     const baseArgs = useResume
       ? (preparedBackend.backend.resumeArgs ?? []).map((entry) =>
@@ -1729,7 +1736,7 @@ class CodeCockpitRuntime {
       repoRoot: candidate.task.repoRoot,
       objective: buildSelfDriveObjective(candidate.task),
       engineId: engineSelection.selected.engine.engineId,
-      engineModel: engineSelection.selected.engine.defaultModel,
+      engineModel: resolveDefaultModelForEngine(engineSelection.selected.engine),
       commandPath: engineSelection.selected.commandPath,
       authHealth: engineSelection.selected.authHealth,
     });
