@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
 
       - name: GPT Code Review
         uses: anc95/ChatGPT-CodeReview@74683225bf06d9a3c56f7733a5a71e2929ba2f2c
