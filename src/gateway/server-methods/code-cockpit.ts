@@ -253,4 +253,20 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
         }),
     );
   },
+  "code.cockpit.workspace-state.save": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().saveWorkspaceState({
+          selectedWorkerId: optionalString(params.selectedWorkerId),
+          lastProjectRoot: optionalString(params.lastProjectRoot),
+        }),
+    );
+  },
+  "code.cockpit.workspace-state.load": async ({ respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () => await getCodeCockpitRuntime().loadWorkspaceState(),
+    );
+  },
 };

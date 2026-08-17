@@ -170,6 +170,12 @@ export type CodeRun = {
   updatedAt: string;
 };
 
+export type CodeCockpitWorkspaceState = {
+  selectedWorkerId?: string;
+  lastProjectRoot?: string;
+  updatedAt: string;
+};
+
 export type CodeCockpitStore = {
   version: number;
   updatedAt: string;
@@ -179,6 +185,7 @@ export type CodeCockpitStore = {
   decisions: CodeDecisionLog[];
   contextSnapshots: CodeContextSnapshot[];
   runs: CodeRun[];
+  workspaceState?: CodeCockpitWorkspaceState;
 };
 
 export type CodeCockpitSummary = {
@@ -415,6 +422,7 @@ function createEmptyStore(updatedAt: string): CodeCockpitStore {
     decisions: [],
     contextSnapshots: [],
     runs: [],
+    workspaceState: undefined,
   };
 }
 
@@ -469,6 +477,10 @@ function normalizeStore(
     decisions: Array.isArray(candidate.decisions) ? candidate.decisions : [],
     contextSnapshots: Array.isArray(candidate.contextSnapshots) ? candidate.contextSnapshots : [],
     runs: Array.isArray(candidate.runs) ? candidate.runs : [],
+    workspaceState:
+      candidate.workspaceState && typeof candidate.workspaceState === "object"
+        ? candidate.workspaceState
+        : undefined,
   };
 }
 
@@ -1335,4 +1347,31 @@ export async function getCodeCockpitWorkspaceSummary(
     recentRuns: sortByUpdatedAt(store.runs).slice(0, 8),
     activeLanes,
   };
+}
+
+export type SaveWorkspaceStateInput = {
+  selectedWorkerId?: string | null;
+  lastProjectRoot?: string | null;
+};
+
+export async function saveCodeCockpitWorkspaceState(
+  input: SaveWorkspaceStateInput,
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeCockpitWorkspaceState> {
+  return await mutateStore(options, (store, updatedAt) => {
+    const state: CodeCockpitWorkspaceState = {
+      selectedWorkerId: normalizePatchString(input.selectedWorkerId) ?? undefined,
+      lastProjectRoot: normalizePatchString(input.lastProjectRoot) ?? undefined,
+      updatedAt,
+    };
+    store.workspaceState = state;
+    return state;
+  });
+}
+
+export async function loadCodeCockpitWorkspaceState(
+  options?: CodeCockpitStoreOptions,
+): Promise<CodeCockpitWorkspaceState | null> {
+  const store = await loadCodeCockpitStore(options);
+  return store.workspaceState ?? null;
 }

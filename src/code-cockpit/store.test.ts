@@ -415,4 +415,66 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("persists and loads workspace state", async () => {
+    const storeModule = await importStoreModule();
+
+    const before = await storeModule.loadCodeCockpitWorkspaceState();
+    expect(before).toBeNull();
+
+    const saved = await storeModule.saveCodeCockpitWorkspaceState({
+      selectedWorkerId: "worker_abc",
+      lastProjectRoot: "/tmp/project",
+    });
+    expect(saved).toMatchObject({
+      selectedWorkerId: "worker_abc",
+      lastProjectRoot: "/tmp/project",
+    });
+    expect(saved.updatedAt).toBeTruthy();
+
+    const loaded = await storeModule.loadCodeCockpitWorkspaceState();
+    expect(loaded).toMatchObject({
+      selectedWorkerId: "worker_abc",
+      lastProjectRoot: "/tmp/project",
+    });
+  });
+
+  it("overwrites workspace state on subsequent saves", async () => {
+    const storeModule = await importStoreModule();
+
+    await storeModule.saveCodeCockpitWorkspaceState({
+      selectedWorkerId: "worker_1",
+      lastProjectRoot: "/tmp/first",
+    });
+
+    await storeModule.saveCodeCockpitWorkspaceState({
+      selectedWorkerId: "worker_2",
+      lastProjectRoot: "/tmp/second",
+    });
+
+    const loaded = await storeModule.loadCodeCockpitWorkspaceState();
+    expect(loaded).toMatchObject({
+      selectedWorkerId: "worker_2",
+      lastProjectRoot: "/tmp/second",
+    });
+  });
+
+  it("clears workspace state fields when null is passed", async () => {
+    const storeModule = await importStoreModule();
+
+    await storeModule.saveCodeCockpitWorkspaceState({
+      selectedWorkerId: "worker_abc",
+      lastProjectRoot: "/tmp/project",
+    });
+
+    await storeModule.saveCodeCockpitWorkspaceState({
+      selectedWorkerId: null,
+      lastProjectRoot: null,
+    });
+
+    const loaded = await storeModule.loadCodeCockpitWorkspaceState();
+    expect(loaded).toMatchObject({});
+    expect(loaded?.selectedWorkerId).toBeUndefined();
+    expect(loaded?.lastProjectRoot).toBeUndefined();
+  });
 });

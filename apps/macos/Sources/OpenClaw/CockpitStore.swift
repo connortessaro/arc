@@ -8,6 +8,8 @@ typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws 
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
+typealias CockpitWorkspaceStateSaver = @Sendable (_ selectedWorkerId: String?, _ lastProjectRoot: String?) async throws -> Void
+typealias CockpitWorkspaceStateLoader = @Sendable () async throws -> CockpitWorkspaceState
 
 enum CockpitLoadError: LocalizedError {
     case gatewayUnavailable(String)
@@ -56,6 +58,9 @@ final class CockpitStore {
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
+    private let saveWorkspaceStateImpl: CockpitWorkspaceStateSaver
+    private let loadWorkspaceStateImpl: CockpitWorkspaceStateLoader
+    private var hasRestoredWorkspaceState = false
 
     var selectedLane: CockpitLaneSummary? {
         guard let snapshot = self.snapshot else { return nil }
@@ -80,7 +85,9 @@ final class CockpitStore {
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
-        reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
+        reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil,
+        saveWorkspaceState: CockpitWorkspaceStateSaver? = nil,
+        loadWorkspaceState: CockpitWorkspaceStateLoader? = nil)
     {
         self.isPreview = isPreview
         self.loadGatewayStatus = loadGatewayStatus ?? {
@@ -112,6 +119,14 @@ final class CockpitStore {
         self.reconnectRemoteGatewayImpl = reconnectRemoteGateway ?? {
             _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
             await GatewayEndpointStore.shared.refresh()
+        }
+        self.saveWorkspaceStateImpl = saveWorkspaceState ?? { selectedWorkerId, lastProjectRoot in
+            try await GatewayConnection.shared.codeWorkspaceStateSave(
+                selectedWorkerId: selectedWorkerId,
+                lastProjectRoot: lastProjectRoot)
+        }
+        self.loadWorkspaceStateImpl = loadWorkspaceState ?? {
+            try await GatewayConnection.shared.codeWorkspaceStateLoad()
         }
     }
 
@@ -160,6 +175,10 @@ final class CockpitStore {
         do {
             self.gatewayStatus = try await self.loadGatewayStatus()
             self.snapshot = try await self.loadSummary()
+            if !self.hasRestoredWorkspaceState {
+                self.hasRestoredWorkspaceState = true
+                await self.restoreWorkspaceState()
+            }
             self.reconcileSelection()
             await self.refreshSelectedWorkerLogs()
         } catch {
@@ -188,6 +207,7 @@ final class CockpitStore {
     func selectWorker(_ workerId: String) async {
         self.selectedWorkerId = workerId
         await self.refreshSelectedWorkerLogs()
+        await self.persistWorkspaceState()
     }
 
     func performWorkerAction(_ action: CockpitWorkerAction, workerId: String) async {
@@ -280,6 +300,26 @@ final class CockpitStore {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.logger.error("code cockpit worker logs failed \(message, privacy: .public)")
             self.lastError = message
+        }
+    }
+
+    private func restoreWorkspaceState() async {
+        do {
+            let state = try await self.loadWorkspaceStateImpl()
+            if let workerId = state.selectedWorkerId, !workerId.isEmpty {
+                self.selectedWorkerId = workerId
+            }
+        } catch {
+            self.logger.debug("code cockpit workspace state restore skipped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func persistWorkspaceState() async {
+        guard !self.isPreview else { return }
+        do {
+            try await self.saveWorkspaceStateImpl(self.selectedWorkerId, self.projectRootLabel)
+        } catch {
+            self.logger.debug("code cockpit workspace state save failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
