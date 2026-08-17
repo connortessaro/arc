@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: GPT Code Review
-        uses: anc95/ChatGPT-CodeReview@74683225bf06d9a3c56f7733a5a71e2929ba2f2c
+        uses: anc95/ChatGPT-CodeReview@1e3df152c1b85c12da580b206c91ad343460c584
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
