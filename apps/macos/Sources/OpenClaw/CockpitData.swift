@@ -194,6 +194,26 @@ struct CockpitWorkerLogs: Codable, Sendable {
     let stderrTail: String
 }
 
+struct CockpitLayoutLane: Codable, Identifiable, Sendable {
+    let id: String
+    let type: String
+    let label: String?
+    let order: Int
+    let widthFraction: Double?
+    let worktreeBinding: String?
+    let backendId: String?
+}
+
+struct CockpitProjectLayout: Codable, Identifiable, Sendable {
+    let id: String
+    let projectRoot: String
+    let name: String
+    let lanes: [CockpitLayoutLane]
+    let isActive: Bool
+    let createdAt: String
+    let updatedAt: String
+}
+
 struct CockpitSupervisorTickResult: Codable, Sendable {
     let action: String
     let reason: String?

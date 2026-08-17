@@ -415,4 +415,146 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("saves, lists, and deletes project layouts", async () => {
+    const storeModule = await importStoreModule();
+
+    const layout = await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "default",
+      lanes: [
+        { id: "lane_1", type: "worker", order: 0 },
+        { id: "lane_2", type: "worker", order: 1 },
+        { id: "lane_3", type: "worker", order: 2 },
+        { id: "lane_4", type: "review", order: 3 },
+      ],
+    });
+
+    expect(layout.id).toMatch(/^layout_/);
+    expect(layout.projectRoot).toBe("/tmp/openclaw");
+    expect(layout.name).toBe("default");
+    expect(layout.lanes).toHaveLength(4);
+    expect(layout.isActive).toBe(true);
+
+    const layouts = await storeModule.listCodeProjectLayouts("/tmp/openclaw");
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0].id).toBe(layout.id);
+
+    const active = await storeModule.getActiveCodeProjectLayout("/tmp/openclaw");
+    expect(active).not.toBeNull();
+    expect(active!.id).toBe(layout.id);
+
+    await storeModule.deleteCodeProjectLayout(layout.id);
+    const afterDelete = await storeModule.listCodeProjectLayouts("/tmp/openclaw");
+    expect(afterDelete).toHaveLength(0);
+  });
+
+  it("upserts layouts by projectRoot + name", async () => {
+    const storeModule = await importStoreModule();
+
+    const first = await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "default",
+      lanes: [{ id: "lane_1", type: "worker", order: 0 }],
+    });
+
+    const updated = await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "default",
+      lanes: [
+        { id: "lane_1", type: "worker", order: 0 },
+        { id: "lane_2", type: "review", order: 1 },
+      ],
+    });
+
+    expect(updated.id).toBe(first.id);
+    expect(updated.lanes).toHaveLength(2);
+
+    const layouts = await storeModule.listCodeProjectLayouts("/tmp/openclaw");
+    expect(layouts).toHaveLength(1);
+  });
+
+  it("deactivates other layouts for same project when saving an active layout", async () => {
+    const storeModule = await importStoreModule();
+
+    const first = await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "wide",
+      lanes: [{ id: "lane_1", type: "worker", order: 0 }],
+      isActive: true,
+    });
+
+    const second = await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "narrow",
+      lanes: [{ id: "lane_2", type: "terminal", order: 0 }],
+      isActive: true,
+    });
+
+    const layouts = await storeModule.listCodeProjectLayouts("/tmp/openclaw");
+    const wide = layouts.find((l) => l.id === first.id)!;
+    const narrow = layouts.find((l) => l.id === second.id)!;
+    expect(wide.isActive).toBe(false);
+    expect(narrow.isActive).toBe(true);
+  });
+
+  it("validates layout lane types", async () => {
+    const storeModule = await importStoreModule();
+
+    await expect(
+      storeModule.saveCodeProjectLayout({
+        projectRoot: "/tmp/openclaw",
+        name: "bad",
+        lanes: [{ id: "lane_1", type: "invalid" as never, order: 0 }],
+      }),
+    ).rejects.toThrow(/Invalid layout lane type/);
+  });
+
+  it("requires at least one lane", async () => {
+    const storeModule = await importStoreModule();
+
+    await expect(
+      storeModule.saveCodeProjectLayout({
+        projectRoot: "/tmp/openclaw",
+        name: "empty",
+        lanes: [],
+      }),
+    ).rejects.toThrow(/At least one layout lane is required/);
+  });
+
+  it("returns empty list for unknown project root", async () => {
+    const storeModule = await importStoreModule();
+    const layouts = await storeModule.listCodeProjectLayouts("/does/not/exist");
+    expect(layouts).toHaveLength(0);
+
+    const active = await storeModule.getActiveCodeProjectLayout("/does/not/exist");
+    expect(active).toBeNull();
+  });
+
+  it("throws when deleting a non-existent layout", async () => {
+    const storeModule = await importStoreModule();
+    await expect(storeModule.deleteCodeProjectLayout("layout_nonexistent")).rejects.toThrow(
+      /Layout "layout_nonexistent" not found/,
+    );
+  });
+
+  it("persists layouts across store reloads", async () => {
+    const storeModule = await importStoreModule();
+
+    await storeModule.saveCodeProjectLayout({
+      projectRoot: "/tmp/openclaw",
+      name: "persistent",
+      lanes: [
+        { id: "lane_1", type: "worker", order: 0 },
+        { id: "lane_2", type: "review", order: 1 },
+      ],
+    });
+
+    // Re-import to force a fresh read from disk
+    const freshModule = await importStoreModule();
+    const layouts = await freshModule.listCodeProjectLayouts("/tmp/openclaw");
+    expect(layouts).toHaveLength(1);
+    expect(layouts[0].name).toBe("persistent");
+    expect(layouts[0].lanes).toHaveLength(2);
+  });
 });

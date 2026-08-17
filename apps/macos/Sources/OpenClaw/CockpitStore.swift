@@ -8,6 +8,9 @@ typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws 
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
+typealias CockpitLayoutSaveAction = @Sendable (
+    _ projectRoot: String, _ name: String, _ lanes: [CockpitLayoutLane]) async throws -> CockpitProjectLayout
+typealias CockpitLayoutLoader = @Sendable (_ projectRoot: String) async throws -> CockpitProjectLayout?
 
 enum CockpitLoadError: LocalizedError {
     case gatewayUnavailable(String)
@@ -47,6 +50,8 @@ final class CockpitStore {
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
+    var activeLayout: CockpitProjectLayout?
+    var isSavingLayout = false
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cockpit.ui")
     private let isPreview: Bool
@@ -56,6 +61,8 @@ final class CockpitStore {
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
+    private let saveLayoutImpl: CockpitLayoutSaveAction
+    private let loadActiveLayoutImpl: CockpitLayoutLoader
 
     var selectedLane: CockpitLaneSummary? {
         guard let snapshot = self.snapshot else { return nil }
@@ -80,7 +87,9 @@ final class CockpitStore {
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
-        reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
+        reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil,
+        saveLayout: CockpitLayoutSaveAction? = nil,
+        loadActiveLayout: CockpitLayoutLoader? = nil)
     {
         self.isPreview = isPreview
         self.loadGatewayStatus = loadGatewayStatus ?? {
@@ -112,6 +121,25 @@ final class CockpitStore {
         self.reconnectRemoteGatewayImpl = reconnectRemoteGateway ?? {
             _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
             await GatewayEndpointStore.shared.refresh()
+        }
+        self.saveLayoutImpl = saveLayout ?? { projectRoot, name, lanes in
+            let laneDicts: [[String: AnyCodable]] = lanes.map { lane in
+                var dict: [String: AnyCodable] = [
+                    "id": AnyCodable(lane.id),
+                    "type": AnyCodable(lane.type),
+                    "order": AnyCodable(lane.order),
+                ]
+                if let label = lane.label { dict["label"] = AnyCodable(label) }
+                if let wf = lane.widthFraction { dict["widthFraction"] = AnyCodable(wf) }
+                if let wb = lane.worktreeBinding { dict["worktreeBinding"] = AnyCodable(wb) }
+                if let bi = lane.backendId { dict["backendId"] = AnyCodable(bi) }
+                return dict
+            }
+            return try await GatewayConnection.shared.codeLayoutSave(
+                projectRoot: projectRoot, name: name, lanes: laneDicts, isActive: true)
+        }
+        self.loadActiveLayoutImpl = loadActiveLayout ?? { projectRoot in
+            try await GatewayConnection.shared.codeLayoutActive(projectRoot: projectRoot)
         }
     }
 
@@ -182,6 +210,50 @@ final class CockpitStore {
             let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             self.logger.error("code cockpit remote reconnect failed \(message, privacy: .public)")
             self.lastError = message
+        }
+    }
+
+    func saveCurrentLayout(name: String = "default") async {
+        guard !self.isSavingLayout else { return }
+        guard let projectRoot = self.projectRootLabel else { return }
+        guard let snapshot = self.snapshot, !snapshot.activeLanes.isEmpty else { return }
+
+        self.isSavingLayout = true
+        defer { self.isSavingLayout = false }
+
+        let lanes = snapshot.activeLanes.enumerated().map { index, lane in
+            CockpitLayoutLane(
+                id: lane.workerId,
+                type: lane.lane,
+                label: lane.workerName,
+                order: index,
+                widthFraction: nil,
+                worktreeBinding: lane.worktreePath,
+                backendId: lane.backendId)
+        }
+
+        do {
+            let saved = try await self.saveLayoutImpl(projectRoot, name, lanes)
+            self.activeLayout = saved
+            self.logger.info("code cockpit layout saved: \(saved.id, privacy: .public)")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit layout save failed \(message, privacy: .public)")
+        }
+    }
+
+    func restoreLayout() async {
+        guard let projectRoot = self.projectRootLabel else { return }
+        if self.isPreview { return }
+
+        do {
+            self.activeLayout = try await self.loadActiveLayoutImpl(projectRoot)
+            if let layout = self.activeLayout {
+                self.logger.info("code cockpit layout restored: \(layout.name, privacy: .public)")
+            }
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit layout restore failed \(message, privacy: .public)")
         }
     }
 
