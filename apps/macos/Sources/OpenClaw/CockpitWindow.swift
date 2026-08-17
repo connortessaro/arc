@@ -64,17 +64,25 @@ struct CockpitWindow: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         CockpitMetricStrip(snapshot: snapshot)
-                        HStack(alignment: .top, spacing: 16) {
-                            CockpitLaneSection(
-                                lanes: snapshot.activeLanes,
-                                selectedWorkerId: self.store.selectedWorkerId,
-                                onSelect: { workerId in
-                                    Task { await self.store.selectWorker(workerId) }
-                                })
-                            CockpitSelectedWorkerSection(store: self.store)
+
+                        HStack(alignment: .center, spacing: 4) {
+                            Text("Layout")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Picker("", selection: self.$store.layoutPreset) {
+                                ForEach(CockpitLayoutPreset.allCases) { preset in
+                                    Text(preset.label).tag(preset)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .fixedSize()
                         }
+
+                        CockpitLayoutGrid(store: self.store)
+
+                        CockpitSelectedWorkerSection(store: self.store)
+
                         HStack(alignment: .top, spacing: 16) {
-                            CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
                         }
                         CockpitTasksSection(tasks: snapshot.recentTasks)
@@ -268,70 +276,113 @@ private struct CockpitMetricCard: View {
     }
 }
 
-private struct CockpitLaneSection: View {
-    let lanes: [CockpitLaneSummary]
-    let selectedWorkerId: String?
-    let onSelect: (String) -> Void
-
-    private let columns = [
-        GridItem(.flexible(minimum: 280), spacing: 12),
-        GridItem(.flexible(minimum: 280), spacing: 12),
-    ]
+/// Renders the structured layout grid: worker slots across the top row, review slot at the end.
+private struct CockpitLayoutGrid: View {
+    @Bindable var store: CockpitStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Workers")
+            Text("Lanes")
                 .font(.title3.weight(.semibold))
-            if self.lanes.isEmpty {
-                sectionPlaceholder("No workers yet. Start the next worker to populate the cockpit.")
-            } else {
-                LazyVGrid(columns: self.columns, alignment: .leading, spacing: 12) {
-                    ForEach(self.lanes) { lane in
-                        Button {
-                            self.onSelect(lane.workerId)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text(lane.workerName)
-                                        .font(.headline)
-                                    Spacer()
-                                    Text(lane.status.replacingOccurrences(of: "_", with: " "))
-                                        .font(.caption.weight(.medium))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text(lane.taskTitle)
-                                    .font(.subheadline)
-                                    .multilineTextAlignment(.leading)
-                                if let branch = lane.branch {
-                                    Text(branch)
-                                        .font(.caption.monospaced())
-                                        .foregroundStyle(.secondary)
-                                }
-                                if let summary = lane.latestRun?.summary, !summary.isEmpty {
-                                    Text(summary)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .multilineTextAlignment(.leading)
-                                }
-                                if let review = lane.pendingReview {
-                                    Text("Pending review: \(review.title)")
-                                        .font(.caption)
-                                        .foregroundStyle(.orange)
-                                        .multilineTextAlignment(.leading)
-                                }
-                            }
-                            .padding(14)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(self.selectedWorkerId == lane.workerId ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
-                        }
-                        .buttonStyle(.plain)
+
+            let workerSlots = self.store.workerSlots
+            let reviewSlot = self.store.reviewSlot
+
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(Array(workerSlots.enumerated()), id: \.offset) { index, lane in
+                    if let lane {
+                        CockpitLaneCard(
+                            lane: lane,
+                            isSelected: self.store.selectedWorkerId == lane.workerId,
+                            onSelect: { Task { await self.store.selectWorker(lane.workerId) } })
+                    } else {
+                        CockpitEmptySlotCard(label: "Worker \(index + 1)", hint: "Start a worker to fill this slot.")
+                    }
+                }
+
+                if self.store.layoutPreset.hasReviewSlot {
+                    if let lane = reviewSlot {
+                        CockpitLaneCard(
+                            lane: lane,
+                            isSelected: self.store.selectedWorkerId == lane.workerId,
+                            onSelect: { Task { await self.store.selectWorker(lane.workerId) } },
+                            accentColor: .orange)
+                    } else {
+                        CockpitEmptySlotCard(label: "Review", hint: "Pending reviews appear here.")
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CockpitLaneCard: View {
+    let lane: CockpitLaneSummary
+    let isSelected: Bool
+    let onSelect: () -> Void
+    var accentColor: Color = .accentColor
+
+    var body: some View {
+        Button(action: self.onSelect) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(self.lane.workerName)
+                        .font(.headline)
+                    Spacer()
+                    Text(self.lane.status.replacingOccurrences(of: "_", with: " "))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Text(self.lane.taskTitle)
+                    .font(.subheadline)
+                    .multilineTextAlignment(.leading)
+                if let branch = self.lane.branch {
+                    Text(branch)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                }
+                if let summary = self.lane.latestRun?.summary, !summary.isEmpty {
+                    Text(summary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                }
+                if let review = self.lane.pendingReview {
+                    Text("Pending review: \(review.title)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.leading)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(self.isSelected ? self.accentColor.opacity(0.14) : Color.primary.opacity(0.04)))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct CockpitEmptySlotCard: View {
+    let label: String
+    let hint: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(self.label)
+                .font(.headline)
+                .foregroundStyle(.tertiary)
+            Text(self.hint)
+                .font(.caption)
+                .foregroundStyle(.quaternary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), style: StrokeStyle(lineWidth: 1, dash: [6, 4])))
     }
 }
 
@@ -451,44 +502,6 @@ private struct CockpitSelectedWorkerSection: View {
         if stderr.isEmpty { return stdout }
         if stdout.isEmpty { return stderr }
         return "\(stdout)\n\nstderr:\n\(stderr)"
-    }
-}
-
-private struct CockpitReviewSection: View {
-    let reviews: [CockpitReviewSummary]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Pending Reviews")
-                .font(.title3.weight(.semibold))
-            if self.reviews.isEmpty {
-                sectionPlaceholder("No pending reviews.")
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(self.reviews.prefix(6)) { review in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(review.title)
-                                .font(.headline)
-                            if let summary = review.summary, !summary.isEmpty {
-                                Text(summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(review.status)
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                        }
-                        .padding(.bottom, 6)
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.primary.opacity(0.04)))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

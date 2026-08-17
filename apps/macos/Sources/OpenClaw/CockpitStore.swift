@@ -47,6 +47,7 @@ final class CockpitStore {
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
     var isRepairingRemoteConnection = false
+    var layoutPreset: CockpitLayoutPreset = .default
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "cockpit.ui")
     private let isPreview: Bool
@@ -63,6 +64,21 @@ final class CockpitStore {
             return snapshot.activeLanes.first
         }
         return snapshot.activeLanes.first(where: { $0.workerId == selectedWorkerId }) ?? snapshot.activeLanes.first
+    }
+
+    /// Worker lanes padded or truncated to fill the layout's worker slot count.
+    var workerSlots: [CockpitLaneSummary?] {
+        let workers = (self.snapshot?.activeLanes ?? []).filter { $0.lane == "worker" || $0.lane == "code" || $0.lane.isEmpty }
+        let count = self.layoutPreset.workerSlotCount
+        if workers.count >= count {
+            return Array(workers.prefix(count))
+        }
+        return workers.map { Optional($0) } + Array(repeating: nil, count: count - workers.count)
+    }
+
+    /// The first review-lane worker, if any.
+    var reviewSlot: CockpitLaneSummary? {
+        (self.snapshot?.activeLanes ?? []).first(where: { $0.lane == "review" })
     }
 
     var projectRootLabel: String? {
