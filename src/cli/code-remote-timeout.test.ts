@@ -68,6 +68,7 @@ describe("code remote gateway timeout", () => {
       retryBackoffCount: 0,
       recentRuns: [],
       activeLanes: [],
+      terminalLanes: [],
       generatedAt: "2026-03-19T00:00:00.000Z",
     });
 
