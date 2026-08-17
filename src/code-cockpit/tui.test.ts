@@ -137,6 +137,7 @@ describe("arc dashboard renderer", () => {
     expect(rendered).toContain("OPERATIONS");
     expect(rendered).toContain("ATTENTION");
     expect(rendered).toContain("SYSTEM PULSE");
+    expect(rendered).toContain("RECENTLY COMPLETED");
     expect(rendered).toContain("RECENT RUNS");
   });
 
@@ -197,5 +198,134 @@ describe("arc dashboard renderer", () => {
     expect(rendered).toContain("retry 1");
     expect(rendered).toContain("blocked transient-runtime=1");
     expect(rendered).toContain("mem 2560MiB");
+  });
+
+  it("renders the queue pipeline with task status counts", () => {
+    const summary = makeSummary();
+    summary.taskStatusCounts = {
+      queued: 2,
+      planning: 1,
+      in_progress: 3,
+      review: 1,
+      blocked: 0,
+      done: 5,
+      cancelled: 0,
+    };
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary,
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [],
+      health: null,
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("Q:2");
+    expect(rendered).toContain("P:1");
+    expect(rendered).toContain("A:3");
+    expect(rendered).toContain("R:1");
+    expect(rendered).toContain("B:0");
+    expect(rendered).toContain("D:5");
+  });
+
+  it("shows health warnings when system resources are critical", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [],
+      health: {
+        gateway: { status: "active" },
+        system: {
+          memoryAvailableMiB: 256,
+          swapUsedMiB: 2048,
+          diskFreeGiB: 2.1,
+          gatewayRssMiB: 3000,
+        },
+      },
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("LOW MEM 256MiB");
+    expect(rendered).toContain("HIGH SWAP 2048MiB");
+    expect(rendered).toContain("LOW DISK 2.1GiB");
+    expect(rendered).toContain("HIGH RSS 3000MiB");
+  });
+
+  it("does not show health warnings when resources are healthy", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [],
+      health: {
+        gateway: { status: "active" },
+        system: {
+          memoryAvailableMiB: 2560,
+          swapUsedMiB: 320,
+          diskFreeGiB: 97.2,
+          gatewayRssMiB: 668,
+        },
+      },
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).not.toContain("LOW MEM");
+    expect(rendered).not.toContain("HIGH SWAP");
+    expect(rendered).not.toContain("LOW DISK");
+    expect(rendered).not.toContain("HIGH RSS");
+  });
+
+  it("shows recently completed tasks", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [
+        makeTask({ status: "in_progress" }),
+        makeTask({
+          id: "task_done_1",
+          title: "fix the login bug",
+          status: "done",
+          updatedAt: "2026-03-20T02:00:00.000Z",
+        }),
+        makeTask({
+          id: "task_done_2",
+          title: "add retry logic",
+          status: "done",
+          updatedAt: "2026-03-20T01:00:00.000Z",
+        }),
+      ],
+      reviews: [],
+      health: null,
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("RECENTLY COMPLETED");
+    expect(rendered).toContain("fix the login bug");
+    expect(rendered).toContain("add retry logic");
+  });
+
+  it("shows updated key hints including unblock and cancel", () => {
+    const lines = renderArcDashboardForTest({
+      width: 158,
+      repoRoot: "/srv/arc/repo",
+      summary: makeSummary(),
+      tasks: [makeTask({ status: "in_progress" })],
+      reviews: [],
+      health: null,
+      statusMessage: "Ready.",
+    });
+
+    const rendered = lines.join("\n");
+    expect(rendered).toContain("u unblock");
+    expect(rendered).toContain("d cancel");
   });
 });
