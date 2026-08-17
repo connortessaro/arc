@@ -1,8 +1,18 @@
 {
   "name": "openclaw",
   "version": "2026.3.14",
-  "description": "Multi-channel AI gateway with extensible messaging integrations",
-  "keywords": [],
+  "description": "A personal project cockpit with persistent AI workers, review queues, and async execution",
+  "keywords": [
+    "agent",
+    "ai",
+    "arc",
+    "automation",
+    "claude",
+    "cockpit",
+    "code-review",
+    "codex",
+    "worker"
+  ],
   "homepage": "https://github.com/openclaw/openclaw#readme",
   "bugs": {
     "url": "https://github.com/openclaw/openclaw/issues"

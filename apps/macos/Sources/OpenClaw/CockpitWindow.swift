@@ -12,7 +12,7 @@ struct CockpitWindow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Arc")
                         .font(.largeTitle.weight(.semibold))
-                    Text(self.store.snapshot?.storePath ?? "OpenClaw-powered operator workspace")
+                    Text(self.store.snapshot?.storePath ?? "Your project workspace")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let projectRoot = self.store.projectRootLabel {
@@ -83,15 +83,15 @@ struct CockpitWindow: View {
             } else if self.store.isLoading {
                 VStack {
                     Spacer()
-                    ProgressView("Loading cockpit…")
+                    ProgressView("Loading workspace…")
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(
-                    "No cockpit data yet",
+                    "No project data yet",
                     systemImage: "rectangle.3.group",
-                    description: Text("Use Start Next Worker to import work from FAST-TODO after the gateway is ready."))
+                    description: Text("Press Start Next Worker to queue a task once the gateway is connected."))
             }
         }
         .padding(20)
@@ -283,7 +283,7 @@ private struct CockpitLaneSection: View {
             Text("Workers")
                 .font(.title3.weight(.semibold))
             if self.lanes.isEmpty {
-                sectionPlaceholder("No workers yet. Start the next worker to populate the cockpit.")
+                sectionPlaceholder("No workers yet. Press Start Next Worker to begin.")
             } else {
                 LazyVGrid(columns: self.columns, alignment: .leading, spacing: 12) {
                     ForEach(self.lanes) { lane in
@@ -433,7 +433,7 @@ private struct CockpitSelectedWorkerSection: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(Color.primary.opacity(0.04)))
             } else {
-                sectionPlaceholder("Select a worker lane to inspect controls and logs.")
+                sectionPlaceholder("Select a worker to see details and logs.")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
