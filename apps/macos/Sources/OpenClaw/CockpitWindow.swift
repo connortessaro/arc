@@ -73,11 +73,11 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        CockpitReviewQueueSection(runs: snapshot.recentRuns)
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
-                            CockpitRunsSection(runs: snapshot.recentRuns)
+                            CockpitTasksSection(tasks: snapshot.recentTasks)
                         }
-                        CockpitTasksSection(tasks: snapshot.recentTasks)
                     }
                 }
             } else if self.store.isLoading {
@@ -477,47 +477,6 @@ private struct CockpitReviewSection: View {
                             Text(review.status)
                                 .font(.caption2)
                                 .foregroundStyle(.orange)
-                        }
-                        .padding(.bottom, 6)
-                    }
-                }
-                .padding(14)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.primary.opacity(0.04)))
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct CockpitRunsSection: View {
-    let runs: [CockpitRunSummary]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Recent Runs")
-                .font(.title3.weight(.semibold))
-            if self.runs.isEmpty {
-                sectionPlaceholder("No worker runs yet.")
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(self.runs.prefix(6)) { run in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(run.id)
-                                    .font(.caption.monospaced())
-                                Spacer()
-                                Text(run.status)
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let summary = run.summary, !summary.isEmpty {
-                                Text(summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
                         }
                         .padding(.bottom, 6)
                     }
