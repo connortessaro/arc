@@ -7,7 +7,24 @@ typealias CockpitGatewayStatusLoader = @Sendable () async throws -> CockpitGatew
 typealias CockpitWorkerLogsLoader = @Sendable (_ workerId: String) async throws -> CockpitWorkerLogs
 typealias CockpitSupervisorTickPerformer = @Sendable (_ repoRoot: String?) async throws -> CockpitSupervisorTickResult
 typealias CockpitWorkerActionPerformer = @Sendable (_ action: CockpitWorkerAction, _ workerId: String) async throws -> Void
+typealias CockpitReviewArtifactsLoader = @Sendable (_ workerId: String) async throws -> CockpitReviewArtifacts
 typealias CockpitRemoteReconnectAction = @Sendable () async throws -> Void
+
+enum ReviewLaneTab: String, CaseIterable, Identifiable {
+    case diff = "Diff"
+    case tests = "Tests"
+    case logs = "Logs"
+
+    var id: String { self.rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .diff: "doc.text.magnifyingglass"
+        case .tests: "checkmark.circle"
+        case .logs: "terminal"
+        }
+    }
+}
 
 enum CockpitLoadError: LocalizedError {
     case gatewayUnavailable(String)
@@ -32,6 +49,7 @@ final class CockpitStore {
         store.selectedWorkerId = CockpitWorkspaceSummary.preview.activeLanes.first?.workerId
         if let workerId = store.selectedWorkerId {
             store.selectedWorkerLogs = .preview(workerId: workerId)
+            store.selectedWorkerReviewArtifacts = .preview(workerId: workerId)
         }
         return store
     }
@@ -43,6 +61,9 @@ final class CockpitStore {
     var selectedWorkerId: String?
     var selectedWorkerLogs: CockpitWorkerLogs?
     var isLoadingWorkerLogs = false
+    var selectedWorkerReviewArtifacts: CockpitReviewArtifacts?
+    var isLoadingReviewArtifacts = false
+    var reviewLaneTab: ReviewLaneTab = .diff
     var isStartingNextWorker = false
     var isPerformingWorkerAction = false
     var activeWorkerAction: CockpitWorkerAction?
@@ -53,6 +74,7 @@ final class CockpitStore {
     private let loadGatewayStatus: CockpitGatewayStatusLoader
     private let loadSummary: CockpitSummaryLoader
     private let loadWorkerLogs: CockpitWorkerLogsLoader
+    private let loadReviewArtifacts: CockpitReviewArtifactsLoader
     private let performSupervisorTickImpl: CockpitSupervisorTickPerformer
     private let performWorkerActionImpl: CockpitWorkerActionPerformer
     private let reconnectRemoteGatewayImpl: CockpitRemoteReconnectAction
@@ -78,6 +100,7 @@ final class CockpitStore {
         loadGatewayStatus: CockpitGatewayStatusLoader? = nil,
         loadSummary: CockpitSummaryLoader? = nil,
         loadWorkerLogs: CockpitWorkerLogsLoader? = nil,
+        loadReviewArtifacts: CockpitReviewArtifactsLoader? = nil,
         performSupervisorTick: CockpitSupervisorTickPerformer? = nil,
         performWorkerAction: CockpitWorkerActionPerformer? = nil,
         reconnectRemoteGateway: CockpitRemoteReconnectAction? = nil)
@@ -93,6 +116,9 @@ final class CockpitStore {
         }
         self.loadWorkerLogs = loadWorkerLogs ?? { workerId in
             try await GatewayConnection.shared.codeWorkerLogs(workerId: workerId)
+        }
+        self.loadReviewArtifacts = loadReviewArtifacts ?? { workerId in
+            try await GatewayConnection.shared.codeWorkerReviewArtifacts(workerId: workerId)
         }
         self.performSupervisorTickImpl = performSupervisorTick ?? { repoRoot in
             try await GatewayConnection.shared.codeSupervisorTick(repoRoot: repoRoot)
@@ -188,6 +214,30 @@ final class CockpitStore {
     func selectWorker(_ workerId: String) async {
         self.selectedWorkerId = workerId
         await self.refreshSelectedWorkerLogs()
+        await self.refreshSelectedWorkerReviewArtifacts()
+    }
+
+    func refreshSelectedWorkerReviewArtifacts() async {
+        guard let workerId = self.selectedWorkerId else {
+            self.selectedWorkerReviewArtifacts = nil
+            return
+        }
+        if self.isPreview {
+            self.selectedWorkerReviewArtifacts = .preview(workerId: workerId)
+            return
+        }
+
+        self.isLoadingReviewArtifacts = true
+        defer { self.isLoadingReviewArtifacts = false }
+
+        do {
+            self.selectedWorkerReviewArtifacts = try await self.loadReviewArtifacts(workerId)
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.logger.error("code cockpit review artifacts failed \(message, privacy: .public)")
+            // Don't overwrite lastError for review artifact failures; they're non-critical
+            self.selectedWorkerReviewArtifacts = nil
+        }
     }
 
     func performWorkerAction(_ action: CockpitWorkerAction, workerId: String) async {
@@ -251,6 +301,7 @@ final class CockpitStore {
         guard let snapshot = self.snapshot else {
             self.selectedWorkerId = nil
             self.selectedWorkerLogs = nil
+            self.selectedWorkerReviewArtifacts = nil
             return
         }
         if let selectedWorkerId = self.selectedWorkerId,

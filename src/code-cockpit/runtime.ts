@@ -38,6 +38,7 @@ import {
   type CodeTask,
   type CodeTaskStatus,
   type CodeWorkerSession,
+  type CodeWorkerReviewArtifacts,
   resolveCodeCockpitStorePath,
   resolveCodeReviewRequestStatus,
   updateCodeRun,
@@ -1582,6 +1583,85 @@ class CodeCockpitRuntime {
       latestRun,
       stdoutTail: await readTail(latestRun?.stdoutLogPath, active?.stdoutTail),
       stderrTail: await readTail(latestRun?.stderrLogPath, active?.stderrTail),
+    };
+  }
+
+  async readWorkerReviewArtifacts(params: {
+    workerId: string;
+  }): Promise<CodeWorkerReviewArtifacts> {
+    await this.ensureInitialized();
+    const store = await loadCodeCockpitStore();
+    const worker = store.workers.find((entry) => entry.id === params.workerId);
+    if (!worker) {
+      throw new Error(`Worker "${params.workerId}" not found`);
+    }
+    const repoRoot = worker.repoRoot;
+    if (!repoRoot) {
+      throw new Error(`Worker "${params.workerId}" has no repoRoot`);
+    }
+    const worktreePath = worker.worktreePath ?? buildDefaultWorktreePath(repoRoot, worker);
+    if (!(await worktreeLooksInitialized(worktreePath))) {
+      throw new Error(`Worker "${params.workerId}" worktree is not initialized`);
+    }
+
+    const baseBranch = await resolveBaseBranch(this.runCommandWithTimeout, repoRoot);
+    const mergeBase = await readGitValue(this.runCommandWithTimeout, worktreePath, [
+      "merge-base",
+      `origin/${baseBranch}`,
+      "HEAD",
+    ]);
+
+    // Diff: changes since divergence from base branch
+    const diffBase = mergeBase ?? `origin/${baseBranch}`;
+    const diffResult = await this.runCommandWithTimeout(
+      ["git", "-C", worktreePath, "diff", "--stat", "--patch", diffBase],
+      { timeoutMs: 15_000 },
+    ).catch(() => null);
+    const diff = trimLogTail(diffResult?.stdout ?? "", MAX_LOG_TAIL_CHARS) ?? "";
+
+    // Commit log: commits since divergence from base branch
+    const logResult = await this.runCommandWithTimeout(
+      ["git", "-C", worktreePath, "log", "--oneline", "--no-decorate", `${diffBase}..HEAD`],
+      { timeoutMs: 10_000 },
+    ).catch(() => null);
+    const commitLog = logResult?.stdout?.trim() ?? "";
+
+    // Test output: read from the latest run's stdout if available
+    const runs = store.runs
+      .filter((entry) => entry.workerId === worker.id)
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const latestRun = runs[0] ?? null;
+    let testOutput = "";
+    if (latestRun?.stdoutLogPath) {
+      try {
+        const fullLog = await fs.readFile(latestRun.stdoutLogPath, "utf8");
+        // Extract test-related output lines (vitest/jest patterns)
+        const testLines = fullLog
+          .split("\n")
+          .filter(
+            (line) =>
+              /^\s*(PASS|FAIL|✓|✗|✕|Tests?:|Test Suites?:|test[s ]|RUNS?)/i.test(line) ||
+              /^\s*(✓|×|√|✘)\s/.test(line) ||
+              /^\s*\d+ (passed|failed|skipped|pending)/i.test(line),
+          );
+        testOutput = testLines.length > 0 ? testLines.join("\n") : "";
+      } catch {
+        // Log file may not exist or be unreadable
+      }
+    }
+    // Fall back to summary if no structured test output found
+    if (!testOutput && latestRun?.summary) {
+      testOutput = latestRun.summary;
+    }
+
+    return {
+      workerId: worker.id,
+      worktreePath,
+      baseBranch,
+      diff,
+      commitLog,
+      testOutput,
+      generatedAt: new Date().toISOString(),
     };
   }
 

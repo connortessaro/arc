@@ -73,6 +73,7 @@ struct CockpitWindow: View {
                                 })
                             CockpitSelectedWorkerSection(store: self.store)
                         }
+                        CockpitReviewLane(store: self.store)
                         HStack(alignment: .top, spacing: 16) {
                             CockpitReviewSection(reviews: snapshot.pendingReviews)
                             CockpitRunsSection(runs: snapshot.recentRuns)
@@ -451,6 +452,231 @@ private struct CockpitSelectedWorkerSection: View {
         if stderr.isEmpty { return stdout }
         if stdout.isEmpty { return stderr }
         return "\(stdout)\n\nstderr:\n\(stderr)"
+    }
+}
+
+private struct CockpitReviewLane: View {
+    @Bindable var store: CockpitStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Review Lane")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+                if self.store.isLoadingReviewArtifacts {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                if self.store.selectedLane != nil {
+                    Button {
+                        Task { await self.store.refreshSelectedWorkerReviewArtifacts() }
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.store.isLoadingReviewArtifacts)
+                }
+            }
+
+            if self.store.selectedLane != nil {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Tab bar
+                    HStack(spacing: 0) {
+                        ForEach(ReviewLaneTab.allCases) { tab in
+                            Button {
+                                self.store.reviewLaneTab = tab
+                            } label: {
+                                Label(tab.rawValue, systemImage: tab.systemImage)
+                                    .font(.callout.weight(
+                                        self.store.reviewLaneTab == tab ? .semibold : .regular))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .frame(maxWidth: .infinity)
+                                    .background(
+                                        self.store.reviewLaneTab == tab
+                                            ? Color.accentColor.opacity(0.12)
+                                            : Color.clear)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .background(Color.primary.opacity(0.03))
+
+                    Divider()
+
+                    // Tab content
+                    if let artifacts = self.store.selectedWorkerReviewArtifacts {
+                        CockpitReviewLaneContent(
+                            tab: self.store.reviewLaneTab,
+                            artifacts: artifacts,
+                            logs: self.store.selectedWorkerLogs)
+                    } else if self.store.isLoadingReviewArtifacts {
+                        VStack {
+                            ProgressView("Loading review artifacts…")
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                    } else {
+                        Text("Select a worker and refresh to load review artifacts.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, minHeight: 80, alignment: .center)
+                    }
+                }
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.primary.opacity(0.04)))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            } else {
+                sectionPlaceholder("Select a worker to review its diff, tests, and logs.")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CockpitReviewLaneContent: View {
+    let tab: ReviewLaneTab
+    let artifacts: CockpitReviewArtifacts
+    let logs: CockpitWorkerLogs?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                switch self.tab {
+                case .diff:
+                    self.diffView
+                case .tests:
+                    self.testsView
+                case .logs:
+                    self.logsView
+                }
+            }
+            .padding(14)
+        }
+        .frame(maxWidth: .infinity, minHeight: 160, maxHeight: 400, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var diffView: some View {
+        HStack(spacing: 12) {
+            LabeledContent("Base") {
+                Text(self.artifacts.baseBranch)
+                    .font(.caption.monospaced())
+            }
+            LabeledContent("Worktree") {
+                Text(self.artifacts.worktreePath)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+
+        if !self.artifacts.commitLog.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Commits")
+                    .font(.caption.weight(.semibold))
+                Text(self.artifacts.commitLog)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+
+        if !self.artifacts.diff.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Diff")
+                    .font(.caption.weight(.semibold))
+                Text(self.artifacts.diff)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.primary.opacity(0.03)))
+            }
+        } else {
+            Text("No diff against \(self.artifacts.baseBranch).")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var testsView: some View {
+        if !self.artifacts.testOutput.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Test Output")
+                    .font(.caption.weight(.semibold))
+                Text(self.artifacts.testOutput)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.primary.opacity(0.03)))
+            }
+        } else {
+            Text("No test output captured for this worker.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var logsView: some View {
+        if let logs {
+            let stdout = logs.stdoutTail.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stderr = logs.stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !stdout.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("stdout")
+                        .font(.caption.weight(.semibold))
+                    Text(stdout)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.primary.opacity(0.03)))
+                }
+            }
+
+            if !stderr.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("stderr")
+                        .font(.caption.weight(.semibold))
+                    Text(stderr)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.red.opacity(0.7))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.red.opacity(0.04)))
+                }
+            }
+
+            if stdout.isEmpty && stderr.isEmpty {
+                Text("No log output yet.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Text("No logs loaded yet.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
