@@ -2,118 +2,98 @@
 
 # Arc
 
-### A personal project cockpit for building software with persistent agent workers.
+### Run Claude and Codex coding agents on a server, then review their work when you're ready.
 
 [![CI](https://github.com/connortessaro/arc/actions/workflows/ci.yml/badge.svg)](https://github.com/connortessaro/arc/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node 22+](https://img.shields.io/badge/node-%3E%3D22-brightgreen)](https://nodejs.org/)
-
-`review-and-steer` · `always-on` · `vps-first runtime` · `swift flagship app` · `claude-first` · `codex fallback`
+[![Node 22.16+](https://img.shields.io/badge/node-%3E%3D22.16-brightgreen)](https://nodejs.org/)
 
 </div>
 
 ---
 
-Arc is built around a simple belief: the next step after today's IDEs and AI coding tools is not more autocomplete, more chat panes, or a better one-off session.
+AI coding tools stop when you close the chat. Arc keeps going. You queue tasks, agents work on them on a remote server, and you come back to diffs, test results, and a list of anything that got stuck.
 
-The next step is a system that can **keep software moving**. Arc is meant to be that system.
+## Features
 
-## ✨ Features
+- **Agents keep running** after you log off. Claude does the work, and Codex takes over if Claude fails.
+- **One branch per task.** Each task gets its own git branch and folder, so agents don't step on each other.
+- **One review screen** for diffs, tests, summaries, and tasks waiting on you.
+- **Many projects** from one place.
+- **Runs on your server**, so you can check in from any machine.
 
-- **Persistent workers** — Claude and Codex agents keep running after a session ends
-- **Isolated worktrees** — Every task runs on its own git branch in its own directory
-- **Review & steer** — Diffs, tests, summaries, and blocked queues in one place
-- **Async execution** — Queue work and come back to results, not in-progress prompts
-- **Multi-project home** — Operate many projects from a single cockpit
-- **VPS-first runtime** — Runs on a remote server; stay in control from anywhere
+## Quick start
 
-## 🚀 Quick Start
+You need Node 22.16 or newer and pnpm.
 
 ```sh
-npm install -g openclaw
-openclaw onboard
+git clone https://github.com/connortessaro/arc.git
+cd arc
+pnpm install
+pnpm build
+pnpm start onboard
 ```
 
-> See the [full docs](docs/cockpit/README.md) for gateway setup, VPS configuration, and worker configuration.
+The [setup guide](docs/cockpit/README.md) covers server setup and agent settings.
 
-## 🏗️ Architecture
+## How it fits together
 
-Arc has one runtime with two surfaces:
+You get two ways in:
 
-| Surface | Role |
+| App | What you do there |
 | --- | --- |
-| **Swift macOS app** | Flagship review workstation — diffs, queues, decisions |
-| **VPS TUI** | Fast remote operator console — queue, inspect, unblock |
+| **Mac app** (Swift) | Review diffs, work through the queue, approve or reject |
+| **Terminal app** on the server | Queue tasks, check progress, unblock stuck agents |
 
-### The Layer Model
+Behind them:
 
-Arc only makes sense if the layers stay clean:
-
-| Layer | Role |
+| Part | Job |
 | --- | --- |
-| **Arc** | product, workflow, workstation, project cockpit |
-| **OpenClaw** | runtime, gateway, worktrees, worker lifecycle, durable state |
-| **Claude + Codex** | worker engines that do the coding work |
-| **Obsidian** | planning, notes, specs, architecture, project memory |
+| **Arc** | The apps and the review workflow |
+| **Runtime** | Runs agents, manages branches, saves task state |
+| **Claude and Codex** | Write the code |
+| **Obsidian** | Holds plans, notes, and specs |
 
-Obsidian should hold thinking. Arc should hold execution.
+## Your part
 
-## 🔄 The Human Loop
+1. Decide what matters.
+2. Queue or reshape tasks.
+3. Let the agents work, each on its own branch.
+4. Come back to diffs, tests, summaries, and stuck tasks.
+5. Approve, redirect, retry, or reorder.
 
-The human role in Arc is mostly to **review and steer**:
+## What works today
 
-1. Decide what matters
-2. Queue or reshape work
-3. Let Claude and Codex execute in isolated worktrees
-4. Return to diffs, tests, summaries, and blocked items
-5. Approve, redirect, retry, or reprioritize
+- Agents run on a server and work through the queue on their own
+- Claude runs first, with Codex as backup
+- Each agent works on its own git branch
+- Tasks, agents, runs, and reviews survive restarts
+- Mac app: review screen in progress
+- Terminal app: works, polish in progress
 
-Arc should feel like a **workstation for software momentum**, not a prompt box with file access.
+## Next up
 
-## 📖 Documentation
+1. Review queue screen
+2. Queue for tasks that need your input
+3. Run summaries
+4. Side-by-side diff, test, and log review
+5. Saved workspaces
+6. A better terminal app
+7. A richer home screen for many projects
+
+## Docs
 
 - [Vision](VISION.md)
-- [Product / Runtime Split](PRODUCT-SPLIT.md)
-- [Arc Context](docs/cockpit/README.md)
-- [Arc Architecture](docs/cockpit/ARCHITECTURE.md)
-- [Arc Self-Drive](docs/cockpit/SELF-DRIVE.md)
-- [Arc V1 Product Spec](docs/plans/2026-03-20-arc-v1-product-spec.md)
+- [Product and runtime split](PRODUCT-SPLIT.md)
+- [Setup guide](docs/cockpit/README.md)
+- [Architecture](docs/cockpit/ARCHITECTURE.md)
+- [Self-drive loop](docs/cockpit/SELF-DRIVE.md)
+- [V1 product spec](docs/plans/2026-03-20-arc-v1-product-spec.md)
 
-## 🗺️ Roadmap
+## Contributing
 
-Near-term product priorities:
+Read [CONTRIBUTING.md](CONTRIBUTING.md) first. Open a pull request for bugs and small fixes. For new features, open an [issue](https://github.com/connortessaro/arc/issues) first.
 
-1. Review queue UI
-2. Blocked / needs-input queue
-3. Run summaries and review-ready artifacts
-4. Diff / test / log review lane
-5. Workspace persistence
-6. Better-looking, more functional TUI ops console
-7. Richer multi-project home
+## License
 
-The first unmistakable flagship milestone is a **review workstation** — not a full editor, not just a daemon dashboard.
-
-## 📍 Current Status
-
-Arc is already a real system, not just a concept. What exists today:
-
-- Canonical async runtime running on a VPS
-- OpenClaw as the durable control plane
-- Self-drive loop executing queued work asynchronously
-- Claude-first with Codex fallback
-- Workers running in isolated git worktrees on local branches
-- Persisted task, worker, run, and review state
-- Swift macOS shell (review workstation in progress)
-- TUI remote operator surface (polish in progress)
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a PR.
-
-- **Bugs & small fixes** → Open a PR
-- **New features / architecture** → Open a [GitHub Discussion](https://github.com/connortessaro/arc/discussions) or ask in Discord first
-- **Questions** → Check [CONTRIBUTING.md](CONTRIBUTING.md) for support links
-
-## 📄 License
-
-[MIT](LICENSE) — built on [OpenClaw](https://github.com/openclaw/openclaw).
+[MIT](LICENSE). Built on [OpenClaw](https://github.com/openclaw/openclaw).
