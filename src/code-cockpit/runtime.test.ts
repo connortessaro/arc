@@ -1273,7 +1273,7 @@ describe("code cockpit runtime", () => {
     });
     expect(result.worker).toMatchObject({
       engineId: "claude",
-      engineModel: "claude-opus-4-6",
+      engineModel: "claude-sonnet-4-6",
     });
     expect(pendingRuns).toHaveLength(1);
     expect(pendingRuns[0]?.input.argv).toEqual(expect.arrayContaining(["claude", "-p"]));
@@ -1365,7 +1365,7 @@ describe("code cockpit runtime", () => {
     expect(result.action).toBe("started");
     expect(result.worker).toMatchObject({
       engineId: "claude",
-      engineModel: "claude-opus-4-6",
+      engineModel: "claude-sonnet-4-6",
       backendId: "claude-cli",
       authHealth: "healthy",
     });
@@ -1468,6 +1468,53 @@ describe("code cockpit runtime", () => {
       retryAfter: "2026-03-20T00:15:00.000Z",
     });
     expect(pendingRuns).toHaveLength(0);
+  });
+
+  it("uses ARC_SELF_DRIVE_CLAUDE_MODEL for new strict-Claude self-drive workers", async () => {
+    const { supervisor, pendingRuns } = createSupervisorStub();
+
+    const task = await store.createCodeTask({
+      title: "Review workstation queue cleanup",
+      repoRoot: tempRepoRoot,
+    });
+
+    vi.stubEnv("ARC_SELF_DRIVE_STRICT_ENGINE", "claude");
+    vi.stubEnv("ARC_SELF_DRIVE_CLAUDE_MODEL", "claude-sonnet-4-6");
+
+    const runtime = createCodeCockpitRuntime({
+      getProcessSupervisor: () => supervisor,
+      loadConfig: () => ({}),
+      resolveCliBackendConfig: (provider) => {
+        if (provider === "claude-cli") {
+          return { id: "claude-cli", config: claudeBackend };
+        }
+        if (provider === "codex-cli") {
+          return { id: "codex-cli", config: backend };
+        }
+        return null;
+      },
+      prepareCliBundleMcpConfig: async ({ backendId, backend: input }) => ({
+        backendId,
+        backend: input,
+      }),
+      runCommandWithTimeout: createRunCommandWithEngineHealthStub({
+        codexHealthy: true,
+        claudeHealthy: true,
+      }),
+    });
+
+    const result = await runtime.supervisorTick({ repoRoot: tempRepoRoot });
+
+    expect(result.action).toBe("started");
+    expect(task.id).toBe(result.task?.id);
+    expect(result.worker).toMatchObject({
+      engineId: "claude",
+      engineModel: "claude-sonnet-4-6",
+    });
+    expect(pendingRuns).toHaveLength(1);
+    expect(pendingRuns[0]?.input.argv).toEqual(
+      expect.arrayContaining(["--model", "claude-sonnet-4-6"]),
+    );
   });
 
   it("skips retrying tasks until their backoff expires and then starts them again", async () => {
