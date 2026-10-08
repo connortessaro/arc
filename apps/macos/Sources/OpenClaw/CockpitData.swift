@@ -187,6 +187,18 @@ struct CockpitLaneSummary: Codable, Identifiable, Sendable {
     }
 }
 
+struct CockpitTerminalLane: Codable, Identifiable, Sendable {
+    let id: String
+    let repoRoot: String
+    let worktreePath: String?
+    let backendProfile: String?
+    let workerId: String?
+    let status: String
+    let title: String?
+    let createdAt: String
+    let updatedAt: String
+}
+
 struct CockpitWorkerLogs: Codable, Sendable {
     let workerId: String
     let latestRun: CockpitRunSummary?
@@ -214,6 +226,7 @@ struct CockpitWorkspaceSummary: Codable, Sendable {
     let pendingReviews: [CockpitReviewSummary]
     let recentRuns: [CockpitRunSummary]
     let activeLanes: [CockpitLaneSummary]
+    let terminalLanes: [CockpitTerminalLane]
 }
 
 extension CockpitGatewayStatus {
@@ -418,6 +431,18 @@ extension CockpitWorkspaceSummary {
                     terminationReason: "paused",
                     updatedAt: "2026-03-19T12:50:00.000Z"),
                 pendingReview: nil),
+        ],
+        terminalLanes: [
+            CockpitTerminalLane(
+                id: "tl_shell",
+                repoRoot: "/Users/tessaro/openclaw",
+                worktreePath: "/Users/tessaro/openclaw/.worktrees/code/shell-lane",
+                backendProfile: "codex-cli",
+                workerId: "worker_shell",
+                status: "open",
+                title: "shell-lane",
+                createdAt: "2026-03-19T12:56:00.000Z",
+                updatedAt: "2026-03-19T12:58:00.000Z"),
         ])
 }
 

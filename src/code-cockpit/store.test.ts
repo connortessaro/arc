@@ -415,4 +415,137 @@ describe("code cockpit store", () => {
       ]),
     );
   });
+
+  it("creates and persists terminal lanes bound to worktrees", async () => {
+    const storeModule = await importStoreModule();
+    const lane = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/feature-a",
+      backendProfile: "codex-cli",
+      title: "feature-a",
+    });
+
+    expect(lane).toMatchObject({
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/feature-a",
+      backendProfile: "codex-cli",
+      status: "open",
+      title: "feature-a",
+    });
+    expect(lane.id).toMatch(/^tl_/);
+
+    const store = await storeModule.loadCodeCockpitStore();
+    expect(store.terminalLanes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: lane.id })]),
+    );
+  });
+
+  it("links a terminal lane to an existing worker", async () => {
+    const storeModule = await importStoreModule();
+    const task = await storeModule.createCodeTask({
+      title: "Worker-linked lane",
+      repoRoot: "/tmp/openclaw",
+    });
+    const worker = await storeModule.createCodeWorkerSession({
+      taskId: task.id,
+      name: "lane-worker",
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/lane-worker",
+    });
+    const lane = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      worktreePath: worker.worktreePath,
+      workerId: worker.id,
+    });
+
+    expect(lane.workerId).toBe(worker.id);
+    expect(lane.worktreePath).toBe(worker.worktreePath);
+  });
+
+  it("rejects terminal lane creation with invalid worker id", async () => {
+    const storeModule = await importStoreModule();
+    await expect(
+      storeModule.createCodeTerminalLane({
+        repoRoot: "/tmp/openclaw",
+        workerId: "worker_nonexistent",
+      }),
+    ).rejects.toThrow(/not found/);
+  });
+
+  it("updates terminal lane fields including worktree rebinding", async () => {
+    const storeModule = await importStoreModule();
+    const lane = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/old-wt",
+      title: "old-title",
+    });
+
+    const updated = await storeModule.updateCodeTerminalLane(lane.id, {
+      worktreePath: "/tmp/openclaw/.worktrees/code/new-wt",
+      backendProfile: "claude-cli",
+      title: "new-title",
+    });
+
+    expect(updated.worktreePath).toBe("/tmp/openclaw/.worktrees/code/new-wt");
+    expect(updated.backendProfile).toBe("claude-cli");
+    expect(updated.title).toBe("new-title");
+  });
+
+  it("closes a terminal lane via status update", async () => {
+    const storeModule = await importStoreModule();
+    const lane = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+    });
+    expect(lane.status).toBe("open");
+
+    const closed = await storeModule.updateCodeTerminalLane(lane.id, { status: "closed" });
+    expect(closed.status).toBe("closed");
+  });
+
+  it("lists terminal lanes sorted by most recently updated", async () => {
+    const storeModule = await importStoreModule();
+    const older = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      title: "older",
+    });
+    const newer = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      title: "newer",
+    });
+
+    const lanes = await storeModule.listCodeTerminalLanes();
+    expect(lanes.length).toBe(2);
+    expect(lanes[0].id).toBe(newer.id);
+    expect(lanes[1].id).toBe(older.id);
+  });
+
+  it("removes a terminal lane from the store", async () => {
+    const storeModule = await importStoreModule();
+    const lane = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+    });
+
+    await storeModule.removeCodeTerminalLane(lane.id);
+
+    const lanes = await storeModule.listCodeTerminalLanes();
+    expect(lanes).toHaveLength(0);
+  });
+
+  it("includes open terminal lanes in the workspace summary", async () => {
+    const storeModule = await importStoreModule();
+    const open = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      worktreePath: "/tmp/openclaw/.worktrees/code/a",
+      title: "open-lane",
+    });
+    const closed = await storeModule.createCodeTerminalLane({
+      repoRoot: "/tmp/openclaw",
+      title: "closed-lane",
+    });
+    await storeModule.updateCodeTerminalLane(closed.id, { status: "closed" });
+
+    const summary = await storeModule.getCodeCockpitWorkspaceSummary();
+    expect(summary.terminalLanes).toHaveLength(1);
+    expect(summary.terminalLanes[0].id).toBe(open.id);
+  });
 });
