@@ -104,6 +104,9 @@ actor GatewayConnection {
         case codeWorkerResume = "code.worker.resume"
         case codeWorkerCancel = "code.worker.cancel"
         case codeWorkerLogs = "code.worker.logs"
+        case codeWorkerPtySnapshot = "code.worker.pty.snapshot"
+        case codeWorkerPtySubscribe = "code.worker.pty.subscribe"
+        case codeWorkerPtyUnsubscribe = "code.worker.pty.unsubscribe"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -846,6 +849,26 @@ extension GatewayConnection {
             method: .codeWorkerLogs,
             params: ["workerId": AnyCodable(workerId)],
             timeoutMs: 10000)
+    }
+
+    func codeWorkerPtySnapshot(workerId: String) async throws -> CockpitPtySnapshot {
+        try await self.requestDecoded(
+            method: .codeWorkerPtySnapshot,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
+    }
+
+    func codeWorkerPtySubscribe(workerId: String) async throws -> CockpitPtySubscription {
+        try await self.requestDecoded(
+            method: .codeWorkerPtySubscribe,
+            params: ["workerId": AnyCodable(workerId)],
+            timeoutMs: 10000)
+    }
+
+    func codeWorkerPtyUnsubscribe(subscriptionId: String) async throws {
+        try await self.requestVoid(
+            method: .codeWorkerPtyUnsubscribe,
+            params: ["subscriptionId": AnyCodable(subscriptionId)])
     }
 
     nonisolated static func decodeCronListResponse(_ data: Data) throws -> [CronJob] {

@@ -70,6 +70,14 @@ async function withRuntimeResult(
   }
 }
 
+function requireSubscriptionId(value: unknown): string {
+  const subId = typeof value === "string" ? value.trim() : "";
+  if (!subId) {
+    throw new Error("subscriptionId is required");
+  }
+  return subId;
+}
+
 export const codeCockpitHandlers: GatewayRequestHandlers = {
   "code.cockpit.summary": async ({ respond }) => {
     await withRuntimeResult(
@@ -252,5 +260,50 @@ export const codeCockpitHandlers: GatewayRequestHandlers = {
           repoRoot: optionalRepoRoot(params.repoRoot),
         }),
     );
+  },
+  "code.worker.pty.snapshot": async ({ params, respond }) => {
+    await withRuntimeResult(
+      respond,
+      async () =>
+        await getCodeCockpitRuntime().readWorkerPtySnapshot({
+          workerId: requireWorkerId(params.workerId),
+        }),
+    );
+  },
+  "code.worker.pty.subscribe": async ({ params, respond }) => {
+    try {
+      const workerId = requireWorkerId(params.workerId);
+      const runtime = getCodeCockpitRuntime();
+      const subscriptionId = runtime.subscribePtyLogs(workerId, () => {
+        // The subscriber callback is used internally; the client polls via
+        // pty.snapshot or receives push events when those are wired up.
+      });
+      respond(true, { subscriptionId, workerId }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
+  },
+  "code.worker.pty.unsubscribe": async ({ params, respond }) => {
+    try {
+      const subscriptionId = requireSubscriptionId(params.subscriptionId);
+      getCodeCockpitRuntime().unsubscribePtyLogs(subscriptionId);
+      respond(true, { ok: true }, undefined);
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    }
   },
 };
